@@ -1,15 +1,9 @@
 # modfish
-
 Python package for reading data from FastCTD and Epsifish developed by the Multiscale Ocean Dynamics group.
 
 Documentation at https://modscripps.github.io/modfish
 
-
-* Free software: GNU General Public License v3
-
-
 ## How to Contribute
-
 - Fork the repository
 - Install your fork as editable, e.g. via `pip install -e modfish`
 - Create a development branch for your feature
@@ -26,8 +20,10 @@ This software comes with [pdoc](https://pdoc.dev/) documentation. The included [
 After cloning this repository, run `git submodule update --init --recursive` to fetch the theme for the docs.
 
 ## Credits
-
 This package was created with
 [Cookiecutter](https://github.com/audreyr/cookiecutter) and the
 [gunnarvoet/cookiecutter-python-package](https://github.com/gunnarvoet/cookiecutter-python-package)
 project template.
+
+## License
+Free software: GNU General Public License v3
