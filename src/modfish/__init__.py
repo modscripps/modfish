@@ -11,21 +11,6 @@ import modfish
 ds = modfish.io.load_fctd_grid("FCTDgrid.mat")
 ```
 
-# Markdown Syntax
-## Figures
-Narrow image:
-```markdown
-![nimage](path/to/figure)
-```
-Medium sized image:
-```markdown
-![image](path/to/figure)
-```
-Wide image:
-```markdown
-![wimage](path/to/figure)
-```
-
 
 # License
 
