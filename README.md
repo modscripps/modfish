@@ -2,6 +2,8 @@
 
 Python package for reading data from FastCTD and Epsifish developed by the Multiscale Ocean Dynamics group.
 
+Documentation at https://modscripps.github.io/modfish
+
 
 * Free software: GNU General Public License v3
 

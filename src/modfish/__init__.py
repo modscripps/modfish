@@ -11,10 +11,6 @@ import modfish
 ds = modfish.io.load_fctd_grid("FCTDgrid.mat")
 ```
 
-
-# License
-
-.. include:: ../../LICENSE
 """
 
 __author__ = """Gunnar Voet"""
