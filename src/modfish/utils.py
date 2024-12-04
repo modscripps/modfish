@@ -114,6 +114,12 @@ def loadmat(filename, onevar=False, verbose=False):
         return out2
 
 
+def parse_filename_datetime(file):
+    yy, mm, dd, time = file.stem.split("I")[1].split("_")
+    dtstr = f"20{yy}-{mm}-{dd} {time[:2]}:{time[2:4]}:{time[4:6]}"
+    return np.datetime64(dtstr)
+
+
 # -----------------------------------------
 # add T-C correction functions from ctdproc
 # -----------------------------------------

@@ -361,7 +361,7 @@ def load_fctd_raw_time_series(fctd_mat_dir, start, end):
         Raw FCTD microconductivity time series.
     """
     all_files = sorted(fctd_mat_dir.glob("EPSI*.mat"))
-    file_times = np.array([parse_filename_datetime(file) for file in all_files])
+    file_times = np.array([modfish.utils.parse_filename_datetime(file) for file in all_files])
     if type(start) is str:
         start = np.datetime64(start)
     if type(end) is str:
@@ -468,36 +468,34 @@ def plot_epsi_profile(prof):
 
 
 def add_n2(ds, dp=10):
-    # calculate buoyancy frequency
-    ds["n2"] = ds.t.copy() * np.nan
-    ds.n2.attrs = dict(
-        long_name=r"N$^2$", units=r"s$^{-2}$", info=f"smoothed over {dp} dbar"
-    )
-    for i in range(len(ds.time)):
-        dsi = ds.isel(time=i)
-        # dsi = dsi.dropna("depth", how="any", subset=["t", "s", "p"])
-        try:
-            n2, midp = gv.ocean.nsqfcn(
-                dsi.s.data,
-                dsi.t.data,
-                dsi.p.data,
-                p0=0,
-                dp=dp,
-                lon=dsi.lon.data,
-                lat=dsi.lat.data,
-            )
-            n2i = scipy.interpolate.interp1d(midp, n2, bounds_error=False)(dsi.p.data)
-            shape = ds.t.shape
-            if len(ds.time) == shape[0]:
-                ds.n2.data[i, :] = n2i
-            elif len(ds.time) == shape[1]:
-                ds.n2.data[:, i] = n2i
-        except:
-            pass
+    # add N^2 calculation that does not depend on gvpy
     return ds
+    # # calculate buoyancy frequency
+    # ds["n2"] = ds.t.copy() * np.nan
+    # ds.n2.attrs = dict(
+    #     long_name=r"N$^2$", units=r"s$^{-2}$", info=f"smoothed over {dp} dbar"
+    # )
+    # for i in range(len(ds.time)):
+    #     dsi = ds.isel(time=i)
+    #     # dsi = dsi.dropna("depth", how="any", subset=["t", "s", "p"])
+    #     try:
+    #         n2, midp = gv.ocean.nsqfcn(
+    #             dsi.s.data,
+    #             dsi.t.data,
+    #             dsi.p.data,
+    #             p0=0,
+    #             dp=dp,
+    #             lon=dsi.lon.data,
+    #             lat=dsi.lat.data,
+    #         )
+    #         n2i = scipy.interpolate.interp1d(midp, n2, bounds_error=False)(dsi.p.data)
+    #         shape = ds.t.shape
+    #         if len(ds.time) == shape[0]:
+    #             ds.n2.data[i, :] = n2i
+    #         elif len(ds.time) == shape[1]:
+    #             ds.n2.data[:, i] = n2i
+    #     except:
+    #         pass
+    # return ds
 
 
-def parse_filename_datetime(file):
-    yy, mm, dd, time = file.stem.split("I")[1].split("_")
-    dtstr = f"20{yy}-{mm}-{dd} {time[:2]}:{time[2:4]}:{time[4:6]}"
-    return np.datetime64(dtstr)
