@@ -15,7 +15,7 @@ Documentation at https://modscripps.github.io/modfish
 - Create a development branch for your feature
 - Commit changes to your branch and push to GitHub
 - Create pull request on GitHub
-- Once changes have been merged, integrate them into your main via `git fetch upstream` and `git merge upstream:main`
+- Once changes have been merged, integrate them into your main via `git fetch upstream` and `git merge upstream/main`
 - Push changes to your fork via `git push origin`
 - Safely delete your local development branch
 
