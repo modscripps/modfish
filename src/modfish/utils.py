@@ -2,7 +2,10 @@
 # coding: utf-8
 """Utilities"""
 
+import numpy as np
 import pandas as pd
+import scipy
+from munch import munchify
 
 
 def mattime_to_datetime64(dnum):
@@ -56,17 +59,19 @@ def datetime64_to_str(dt64, unit="D"):
 
 def loadmat(filename, onevar=False, verbose=False):
     """
-    Load Matlab .mat files and return as dictionary.
+    Load Matlab .mat files and return as dictionary with .dot-access.
 
     Parameters
     ----------
     filename : str
         Path to .mat file
+    onevar : bool
+        Set to true if there is only one variable in the mat file.
 
     Returns
     -------
-    out : dict
-        Data in a dictionary.
+    out : dict (Munch)
+        Data in a munchified dictionary.
     """
 
     def _check_keys(dict):
@@ -77,11 +82,11 @@ def loadmat(filename, onevar=False, verbose=False):
         for key in dict:
             ni = np.size(dict[key])
             if ni <= 1:
-                if isinstance(dict[key], spio.matlab.mat_struct):
+                if isinstance(dict[key], scipy.io.matlab.mat_struct):
                     dict[key] = _todict(dict[key])
             else:
                 for i in range(0, ni):
-                    if isinstance(dict[key][i], spio.matlab.mat_struct):
+                    if isinstance(dict[key][i], scipy.io.matlab.mat_struct):
                         dict[key][i] = _todict(dict[key][i])
         return dict
 
@@ -92,26 +97,48 @@ def loadmat(filename, onevar=False, verbose=False):
         dict = {}
         for strg in matobj._fieldnames:
             elem = matobj.__dict__[strg]
-            if isinstance(elem, spio.matlab.mat_struct):
+            if isinstance(elem, scipy.io.matlab.mat_struct):
                 dict[strg] = _todict(elem)
             else:
                 dict[strg] = elem
         return dict
 
-    data = spio.loadmat(filename, struct_as_record=False, squeeze_me=True)
+    data = scipy.io.loadmat(filename, struct_as_record=False, squeeze_me=True)
     out = _check_keys(data)
 
-    dk = list(out.keys())
-    actual_keys = [k for k in dk if k[:2] != "__"]
-    if len(actual_keys) == 1:
-        if verbose:
-            print("found only one variable, returning munchified data structure")
-        return out[actual_keys[0]]
+    # Check if there is only one variable in the dataset. If so, directly
+    # return only this variable as munchified dataset.
+    if not onevar:
+        dk = list(out.keys())
+        actual_keys = [k for k in dk if k[:2] != "__"]
+        if len(actual_keys) == 1:
+            if verbose:
+                print("found only one variable, returning munchified data structure")
+            return munchify(out[actual_keys[0]])
+        else:
+            out2 = {}
+            for k in actual_keys:
+                out2[k] = out[k]
+            return munchify(out2)
+
+    # for legacy, keep the option in here as well.
+    if onevar:
+        # let's check if there is only one variable in there and return it
+        kk = list(out.keys())
+        outvars = []
+        for k in kk:
+            if k[:2] != "__":
+                outvars.append(k)
+        if len(outvars) == 1:
+            if verbose:
+                print("returning munchified data structure")
+            return munchify(out[outvars[0]])
+        else:
+            if verbose:
+                print("found more than one var...")
+            return out
     else:
-        out2 = {}
-        for k in actual_keys:
-            out2[k] = out[k]
-        return out2
+        return out
 
 
 def parse_filename_datetime(file):
