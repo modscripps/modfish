@@ -13,6 +13,8 @@ Python package for reading data from FastCTD and Epsifish developed by the Multi
 ## Tools
 This software comes with [pdoc](https://pdoc.dev/) documentation. The included [Makefile](Makefile) has recipes `servedocs` to display the documentation, including a watchdog that acts on file changes, and `docs` to generate the html files.
 
+After cloning this repository, run `git submodule update --init --recursive` to fetch the theme for the docs.
+
 ## Credits
 
 This package was created with
