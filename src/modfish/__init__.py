@@ -4,6 +4,9 @@
 Python package to work with data from FastCTD and Epsifish instruments devloped by the
 [Multiscale Ocean Dynamics](https://mod.ucsd.edu) group at the [Scripps Institution of Oceanography](https://scripps.ucsd.edu).
 
+# Installation
+Clone or download the [repository](https://github.com/modscripps/modfish) and install via `pip install modfish` or, to be able to make changes to the code on the fly, as editable package via `pip install -e modfish`.
+
 # Examples
 
 Read a gridded FastCTD dataset into an `xarray.Dataset` structure:
