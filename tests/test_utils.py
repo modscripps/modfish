@@ -4,5 +4,5 @@
 
 import modfish
 
-def test_dummy():
-    modfish.io.dummy()
+def test_mattime_to_datetime64():
+    pass
