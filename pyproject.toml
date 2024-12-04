@@ -27,9 +27,9 @@ dependencies = []
 [project.urls]
 # Homepage = "https://example.com"
 # Documentation = "https://readthedocs.org"
-Repository = "https://github.com/gunnarvoet/modfish.git"
-Issues = "https://github.com/gunnarvoet/modfish/issues"
-Changelog = "https://github.com/gunnarvoet/modfish/blob/main/HISTORY.md"
+Repository = "https://github.com/modscripps/modfish.git"
+Issues = "https://github.com/modscripps/modfish/issues"
+Changelog = "https://github.com/modscripps/modfish/blob/main/HISTORY.md"
 
 [tool.pytest.ini_options]
 # in general, do not place a `__init__.py` in your tests
