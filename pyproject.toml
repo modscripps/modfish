@@ -1,0 +1,43 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "modfish"
+version = "2024.12.0"
+authors = [
+    {name = "Gunnar Voet", email = 'gvoet@ucsd.edu'},
+    ]
+description = "Python package for reading data from FastCTD and Epsifish developed by the Multiscale Ocean Dynamics group."
+readme = "README.md"
+license = {file = "LICENSE"}
+keywords = ["physical oceanography"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+"License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+
+    "Natural Language :: English",
+    "Programming Language :: Python :: 3",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Oceanography",
+    ]
+requires-python = ">= 3.8"
+dependencies = []
+
+[project.urls]
+# Homepage = "https://example.com"
+# Documentation = "https://readthedocs.org"
+Repository = "https://github.com/gunnarvoet/modfish.git"
+Issues = "https://github.com/gunnarvoet/modfish/issues"
+Changelog = "https://github.com/gunnarvoet/modfish/blob/main/HISTORY.md"
+
+[tool.pytest.ini_options]
+# in general, do not place a `__init__.py` in your tests
+# options are explained here:
+# https://learn.scientific-python.org/development/guides/pytest/
+# minversion = "6.0"
+# addopts = ["-ra", "--showlocals", "--strict-markers", "--strict-config"]
+# xfail_strict = true
+# filterwarnings = ["error"]
+# log_cli_level = "info"
+testpaths = ["tests"]
