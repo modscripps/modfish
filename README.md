@@ -3,6 +3,9 @@ Python package for reading data from FastCTD and Epsifish developed by the Multi
 
 Documentation at https://modscripps.github.io/modfish
 
+## How to Install
+Clone or download the repository and install via `pip install modfish` or, to be able to make changes to the code on the fly, as editable package via `pip install -e modfish`.
+
 ## How to Contribute
 - Fork the repository
 - Install your fork as editable, e.g. via `pip install -e modfish`
