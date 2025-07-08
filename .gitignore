@@ -35,3 +35,7 @@ pip-log.txt
 
 # mypy
 .mypy_cache/
+
+# uv
+uv.lock
+.venv
