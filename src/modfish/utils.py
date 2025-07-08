@@ -3,9 +3,13 @@
 """Utilities"""
 
 import numpy as np
+import matplotlib.pyplot as plt
 import pandas as pd
 import scipy
 from munch import munchify
+import gsw
+import xarray as xr
+from scipy import fft, optimize, signal, stats
 
 
 def mattime_to_datetime64(dnum):

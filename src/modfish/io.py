@@ -5,10 +5,8 @@ I/O functions mostly for reading .mat files produced from FastCTD and Epsifish o
 """
 
 import gsw
-import matplotlib.pyplot as plt
 import numpy as np
 import scipy
-from scipy import fft, optimize, signal, stats
 import xarray as xr
 
 import modfish
@@ -361,7 +359,9 @@ def load_fctd_raw_time_series(fctd_mat_dir, start, end):
         Raw FCTD microconductivity time series.
     """
     all_files = sorted(fctd_mat_dir.glob("EPSI*.mat"))
-    file_times = np.array([modfish.utils.parse_filename_datetime(file) for file in all_files])
+    file_times = np.array(
+        [modfish.utils.parse_filename_datetime(file) for file in all_files]
+    )
     if type(start) is str:
         start = np.datetime64(start)
     if type(end) is str:
@@ -497,5 +497,3 @@ def add_n2(ds, dp=10):
     #     except:
     #         pass
     # return ds
-
-
