@@ -24,8 +24,8 @@ ds = modfish.io.load_fctd_grid("FCTDgrid.mat", what="dn")
 """
 
 __author__ = """Gunnar Voet"""
-__email__ = 'gvoet@ucsd.edu'
-__version__ = '2024.12.0'
+__email__ = "gvoet@ucsd.edu"
+__version__ = "2024.12.0"
 
 __all__ = ["io", "utils"]
 from . import io, utils

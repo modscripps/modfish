@@ -6,6 +6,10 @@ Documentation at https://modscripps.github.io/modfish
 ## How to Install
 Clone or download the repository and install via `pip install modfish` or, to be able to make changes to the code on the fly, as editable package via `pip install -e modfish`.
 
+If you have [uv](https://docs.astral.sh/uv/) installed, the package can be added via `uv add <path-to-modfish>` or `uv add --editable <path-to-modfish>`.
+
+Note: The package has **not** been published to pip so you need to install from sources.
+
 ## How to Contribute
 - Fork the repository
 - Install your fork as editable, e.g. via `pip install -e modfish`
@@ -18,7 +22,9 @@ Clone or download the repository and install via `pip install modfish` or, to be
 
 
 ## Tools
-This software comes with [pdoc](https://pdoc.dev/) documentation. The included [Makefile](Makefile) has recipes `servedocs` to display the documentation, including a watchdog that acts on file changes, and `docs` to generate the html files.
+This software comes with [pdoc](https://pdoc.dev/) documentation.
+The included [Makefile](Makefile) has recipes `servedocs` to display the documentation, including a watchdog that acts on file changes, and `docs` to generate the html files.
+Note that make commands rely on uv.
 
 After cloning this repository, run `git submodule update --init --recursive` to fetch the theme for the docs.
 
