@@ -198,6 +198,18 @@ def load_epsi_ctd_raw(name):
 
 
 def load_epsi_grid(file):
+    """Load Epsifish gridded data file.
+
+    This is usually the file `<survey>/profiles/griddedProfiles.mat`.
+
+    Parameters
+    ----------
+    file : str or pathlib.Path
+
+    Returns
+    -------
+    xr.Dataset
+    """
     grd = modfish.utils.loadmat(file)
     time = modfish.utils.mattime_to_datetime64(grd.dnum)
     ds = xr.Dataset(
@@ -372,6 +384,18 @@ def load_fctd_raw_time_series(fctd_mat_dir, start, end):
 
 
 def load_fctd_grid(file, what="all"):
+    """Load FastCTD gridded data file.
+
+    This is usually the file `<survey>/fctd_mat/FCTDgrid.mat`.
+
+    Parameters
+    ----------
+    file : str or pathlib.Path
+
+    Returns
+    -------
+    xr.Dataset
+    """
     tmp = modfish.utils.loadmat(file)
     match what:
         case "down":
