@@ -1,10 +1,10 @@
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["uv_build>=0.8.22,<0.10.0"]
+build-backend = "uv_build"
 
 [project]
 name = "modfish"
-version = "2025.07.0"
+version = "2025.10.0"
 authors = [
     {name = "Gunnar Voet", email = 'gvoet@ucsd.edu'},
     ]
@@ -23,18 +23,18 @@ classifiers = [
     ]
 requires-python = ">= 3.10"
 dependencies = [
-    "pandas",
-    "xarray",
-    "scipy",
-    "numpy",
-    "gsw",
-    "matplotlib",
-    "munch",
+    "munch>=4.0.0",
+    "matplotlib>=3.1",
+    "gsw>=3.6",
+    "numpy>=2.1",
+    "scipy>=1.12",
+    "xarray>=2024.1.0",
+    "pandas>=2.0",
 ]
 
 [project.urls]
 # Homepage = "https://example.com"
-# Documentation = "https://readthedocs.org"
+Documentation = "https://modscripps.github.io/modfish"
 Repository = "https://github.com/modscripps/modfish.git"
 Issues = "https://github.com/modscripps/modfish/issues"
 Changelog = "https://github.com/modscripps/modfish/blob/main/HISTORY.md"
@@ -49,3 +49,11 @@ Changelog = "https://github.com/modscripps/modfish/blob/main/HISTORY.md"
 # filterwarnings = ["error"]
 # log_cli_level = "info"
 testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "ipython>=8.37.0",
+    "pdoc>=15.0.4",
+    "pytest>=8.4.2",
+    "ruff>=0.14.0",
+]

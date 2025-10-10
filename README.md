@@ -4,9 +4,9 @@ Python package for reading data from FastCTD and Epsifish developed by the Multi
 Documentation at https://modscripps.github.io/modfish
 
 ## How to Install
-Clone or download the repository and install via `pip install modfish` or, to be able to make changes to the code on the fly, as editable package via `pip install -e modfish`.
+Clone or download the repository and install via `pip install <path-to-modfish>` or, to be able to make changes to the code on the fly, as editable package via `pip install -e <path-to-modfish>`.
 
-If you have [uv](https://docs.astral.sh/uv/) installed, the package can be added via `uv add <path-to-modfish>` or `uv add --editable <path-to-modfish>`.
+With [uv](https://docs.astral.sh/uv/), the package can be added via `uv add <path-to-modfish>` or `uv add --editable <path-to-modfish>`.
 
 Note: The package has **not** been published to pip so you need to install from sources.
 
