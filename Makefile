@@ -27,19 +27,19 @@ help:
 	@python -c "$$PRINT_HELP_PYSCRIPT" < $(MAKEFILE_LIST)
 
 lint: ## check style with flake8
-	uvx ruff check src/modfish
+	uv run ruff check src/modfish
 
 format:
-	uvx ruff format src/modfish
+	uv run ruff format src/modfish
 
 test: ## run tests
-	uv run --with pytest pytest
+	uv run pytest
 
 docs: ## generate documentation using pdoc
 	rm -rf docs
-	uv run --with pdoc pdoc --math -t .pdoc-theme-gv -d numpy -o docs modfish
+	uv run pdoc --math -t .pdoc-theme-gv -d numpy -o docs modfish
 	$(BROWSER) docs/index.html
 
 servedocs: ## compile the docs & watch for changes
-	uv run --with pdoc pdoc --math -t .pdoc-theme-gv -d numpy modfish
+	uv run pdoc --math -t .pdoc-theme-gv -d numpy modfish
 	# $(BROWSER) http://localhost:8080
