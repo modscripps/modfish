@@ -54,23 +54,15 @@ jobs:
 
     # 2. Install dependencies (including ruff and pytest as dev dependencies)
     - name: Install dependencies (including dev)
-      run: |
-        uv sync --dev
-      # The following is for not using the cache action, but it didn't quite work.
-        # with:
-        #   python-version: '3.11'
-        #   cach: 'pip'
-      # - run: pip install pdoc
-      # - run: pip install -r requirements.txt
-      # - run: pip install -e .
+      run: uv sync --dev
 
-      - name: Build docs
-        run: make docs
+    - name: Build docs
+      run: make docs
 
-      - name: upload
-        uses: actions/upload-pages-artifact@v4
-        with:
-          path: docs/
+    - name: upload
+      uses: actions/upload-pages-artifact@v4
+      with:
+        path: docs/
 
   # Deploy the artifact to GitHub pages.
   # This is a separate job so that only actions/deploy-pages has the necessary permissions.
