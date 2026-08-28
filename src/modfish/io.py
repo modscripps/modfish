@@ -300,40 +300,45 @@ def load_fctd_raw_mat(file):
             fDOM=(("time"), d.fDOM),
             lon=(("time"), d.longitude),
             lat=(("time"), d.latitude),
-
-            # GV 2025-11-30
-            # these used to be in the files but are not anymore?
-            # dPdt=(("time"), d.dPdt),
-            # chi=(("time"), d.chi),
-            # chi2=(("time"), d.chi2),
-            # w=(("time"), d.w),
         ),
     )
+    # GV 2025-11-30
+    # dPdt, chi, chi2 and w are written by the older Matlab routines only.
+    for var in ["dPdt", "chi", "chi2", "w"]:
+        if var in d:
+            ds[var] = (("time"), d[var])
+
     ds.p.attrs = dict(long_name="pressure", units="dbar")
     ds.c.attrs = dict(long_name="conductivity", units="mS/cm")
     ds.t.attrs = dict(long_name="temperature", units="°C")
-    # ds.chi.attrs = dict(long_name=r"$\chi$", units="K$^2$/s")
-    # ds.chi2.attrs = dict(long_name=r"$\chi_2$", units="K$^2$/s")
+    if "chi" in ds:
+        ds.chi.attrs = dict(long_name=r"$\chi$", units="K$^2$/s")
+    if "chi2" in ds:
+        ds.chi2.attrs = dict(long_name=r"$\chi_2$", units="K$^2$/s")
 
     # generate depth variable
     mean_lat = np.nanmean(ds.lat.data)
     # we'll do the same as the Matlab routine and set latitude to 30 if nan
-    if np.isnan(mean_lat): mean_lat = 30
+    if np.isnan(mean_lat):
+        mean_lat = 30
     ds["depth"] = (("time"), -gsw.z_from_p(ds.p.data, mean_lat))
 
-
     # microconductivity
-    # reshape arrays so they are not stacked.
-    ucon = d.uConductivity.reshape(-1)
+    # The newer Matlab routines write uConductivity/time_fast as stacked
+    # matrices, the older ones ucon/ucon_corr/microtime as flat vectors.
+    if "uConductivity" in d:
+        ucon = d.uConductivity.reshape(-1)
+    else:
+        ucon = d.ucon
+
     if "time_fast" in d:
-        # convert time
-        microtime_mat = d.time_fast.reshape(-1)
-        microtime = modfish.utils.mattime_to_datetime64(microtime_mat)
+        microtime = modfish.utils.mattime_to_datetime64(d.time_fast.reshape(-1))
+    elif "microtime" in d:
+        microtime = modfish.utils.mattime_to_datetime64(d.microtime)
     else:
         # generate time vector if none exists (this happens when the Matlab
-        # routines generate a microconductivity matrix with all NaNs.
-        n = len(ucon)
-        microtime = modfish.utils.datetime_linspace(time[0], time[-1], n)
+        # routines generate a microconductivity matrix with all NaNs).
+        microtime = modfish.utils.datetime_linspace(time[0], time[-1], len(ucon))
 
     # generate output dataset for microconductivity
     mds = xr.Dataset(
@@ -342,9 +347,10 @@ def load_fctd_raw_mat(file):
         ),
         data_vars=dict(
             ucon=(("time"), ucon),
-            # ucon_corr=(("time"), d.ucon_corr),
         ),
     )
+    if "ucon_corr" in d:
+        mds["ucon_corr"] = (("time"), d.ucon_corr)
 
     return ds, mds
 
@@ -498,13 +504,9 @@ def load_fctd_grid(file, what="all"):
             s=(("depth", "time"), grd.salinity),
             density=(("depth", "time"), grd.density),
             p=(("depth", "time"), grd.pressure),
-            # bb=(("depth", "time"), grd.bb),
-            # chla=(("depth", "time"), grd.chla),
-            chi=(("depth", "time"), grd.chi),
-            # chi2=(("depth", "time"), grd.chi2),
         ),
     )
-    for var in ["drop", "altDist", "w", "bb", "chla"]:
+    for var in ["drop", "altDist", "w", "bb", "chla", "chi", "chi2"]:
         if var in grd.keys():
             ds[var] = (("depth", "time"), grd[var])
 
@@ -521,8 +523,10 @@ def load_fctd_grid(file, what="all"):
 
     ds = add_n2(ds, dp=10)
 
-    ds.chi.attrs = dict(long_name=r"$\chi_1$", units="K$^2$/s")
-    # ds.chi2.attrs = dict(long_name=r"$\chi_2$", units="K$^2$/s")
+    if "chi" in ds:
+        ds.chi.attrs = dict(long_name=r"$\chi_1$", units="K$^2$/s")
+    if "chi2" in ds:
+        ds.chi2.attrs = dict(long_name=r"$\chi_2$", units="K$^2$/s")
     ds.t.attrs = dict(long_name="temperature", units="°C")
     ds.s.attrs = dict(long_name="salinity", units="psu")
     ds.depth.attrs = dict(long_name="depth", units="m")
