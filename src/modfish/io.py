@@ -4,6 +4,8 @@
 I/O functions mostly for reading .mat files produced from FastCTD and Epsifish observations.
 """
 
+import re
+from pathlib import Path
 import gsw
 import numpy as np
 import scipy
@@ -288,8 +290,6 @@ def load_fctd_raw_mat(file):
     ds = xr.Dataset(
         coords=dict(
             time=(("time"), time),
-            lon=(("time"), d.longitude),
-            lat=(("time"), d.latitude),
         ),
         data_vars=dict(
             c=(("time"), d.conductivity),
@@ -298,27 +298,51 @@ def load_fctd_raw_mat(file):
             bb=(("time"), d.bb),
             chla=(("time"), d.chla),
             fDOM=(("time"), d.fDOM),
-            dPdt=(("time"), d.dPdt),
-            chi=(("time"), d.chi),
-            chi2=(("time"), d.chi2),
-            w=(("time"), d.w),
+            lon=(("time"), d.longitude),
+            lat=(("time"), d.latitude),
+
+            # GV 2025-11-30
+            # these used to be in the files but are not anymore?
+            # dPdt=(("time"), d.dPdt),
+            # chi=(("time"), d.chi),
+            # chi2=(("time"), d.chi2),
+            # w=(("time"), d.w),
         ),
     )
     ds.p.attrs = dict(long_name="pressure", units="dbar")
     ds.c.attrs = dict(long_name="conductivity", units="mS/cm")
     ds.t.attrs = dict(long_name="temperature", units="°C")
-    ds.chi.attrs = dict(long_name=r"$\chi$", units="K$^2$/s")
-    ds.chi2.attrs = dict(long_name=r"$\chi_2$", units="K$^2$/s")
+    # ds.chi.attrs = dict(long_name=r"$\chi$", units="K$^2$/s")
+    # ds.chi2.attrs = dict(long_name=r"$\chi_2$", units="K$^2$/s")
+
+    # generate depth variable
+    mean_lat = np.nanmean(ds.lat.data)
+    # we'll do the same as the Matlab routine and set latitude to 30 if nan
+    if np.isnan(mean_lat): mean_lat = 30
+    ds["depth"] = (("time"), -gsw.z_from_p(ds.p.data, mean_lat))
+
 
     # microconductivity
-    microtime = modfish.utils.mattime_to_datetime64(d.microtime)
+    # reshape arrays so they are not stacked.
+    ucon = d.uConductivity.reshape(-1)
+    if "time_fast" in d:
+        # convert time
+        microtime_mat = d.time_fast.reshape(-1)
+        microtime = modfish.utils.mattime_to_datetime64(microtime_mat)
+    else:
+        # generate time vector if none exists (this happens when the Matlab
+        # routines generate a microconductivity matrix with all NaNs.
+        n = len(ucon)
+        microtime = modfish.utils.datetime_linspace(time[0], time[-1], n)
+
+    # generate output dataset for microconductivity
     mds = xr.Dataset(
         coords=dict(
             time=(("time"), microtime),
         ),
         data_vars=dict(
-            ucon=(("time"), d.ucon),
-            ucon_corr=(("time"), d.ucon_corr),
+            ucon=(("time"), ucon),
+            # ucon_corr=(("time"), d.ucon_corr),
         ),
     )
 
@@ -370,7 +394,11 @@ def load_fctd_raw_time_series(fctd_mat_dir, start, end):
     mds : xr.Dataset
         Raw FCTD microconductivity time series.
     """
-    all_files = sorted(fctd_mat_dir.glob("EPSI*.mat"))
+    # We need a workaround for some of the files starting with EPSI, others
+    # with FCTD.
+
+    # all_files = sorted(fctd_mat_dir.glob("EPSI*.mat"))
+    all_files = _find_fctd_mat_files(fctd_mat_dir)
     file_times = np.array(
         [modfish.utils.parse_filename_datetime(file) for file in all_files]
     )
@@ -381,6 +409,54 @@ def load_fctd_raw_time_series(fctd_mat_dir, start, end):
     ind = np.flatnonzero((file_times > start) & (file_times < end))
     files = [all_files[i] for i in ind]
     return fctd_mat_combine(files)
+
+
+def _find_fctd_mat_files(data_directory):
+    """Locate data files in an fctd_mat directory.
+
+    Parameters
+    ----------
+    data_directory :
+
+    Returns
+    -------
+
+    """
+    # Convert directory from str to pathlib.Path if necessary
+    data_directory = modfish.utils.process_file_path(data_directory)
+    # Define the flexible glob pattern.
+    # '????' matches the 4-character prefix (EPSI/FCTD)
+    # '*' matches the entire variable date/time part (YY_MM_DD_hhmmss)
+    search_pattern = '????*.mat'
+
+    # Define specific filenames to exclude
+    excluded_files = {
+        'FCTDgrid.mat',
+        'FCTDall_L0.mat',
+        'FCTDall_L1.mat',
+        'FastCTD_MATfile_TimeIndex.mat'
+    }
+
+    # Define a regex to validate the *start* of the filename after the glob is applied.
+    # This ensures only 'EPSI' or 'FCTD' files are included,
+    # preventing other 4-letter prefixes like 'TEST' from sneaking in.
+    # ^(EPSI|FCTD): Starts with 'EPSI' OR 'FCTD'
+    # \d{2}_\d{2}_\d{2}: Followed by YY_MM_DD
+    # _: Followed by an underscore
+    # \d{6}: Followed by hhmmss
+    # \.mat$: Ends with .mat
+    # The full pattern is a good way to be specific after the broad glob.
+    validation_regex = re.compile(r"^(EPSI|FCTD)\d{2}_\d{2}_\d{2}_\d{6}\.mat$", re.IGNORECASE)
+
+    # Path.glob() to find and filter all matching files
+    matching_files = [
+        # Get the string representation of the path object
+        p
+        for p in data_directory.glob(search_pattern)
+        if (p.name not in excluded_files and validation_regex.match(p.name))
+    ]
+
+    return sorted(matching_files)
 
 
 def load_fctd_grid(file, what="all"):
@@ -425,7 +501,7 @@ def load_fctd_grid(file, what="all"):
             # bb=(("depth", "time"), grd.bb),
             # chla=(("depth", "time"), grd.chla),
             chi=(("depth", "time"), grd.chi),
-            chi2=(("depth", "time"), grd.chi2),
+            # chi2=(("depth", "time"), grd.chi2),
         ),
     )
     for var in ["drop", "altDist", "w", "bb", "chla"]:
@@ -446,7 +522,7 @@ def load_fctd_grid(file, what="all"):
     ds = add_n2(ds, dp=10)
 
     ds.chi.attrs = dict(long_name=r"$\chi_1$", units="K$^2$/s")
-    ds.chi2.attrs = dict(long_name=r"$\chi_2$", units="K$^2$/s")
+    # ds.chi2.attrs = dict(long_name=r"$\chi_2$", units="K$^2$/s")
     ds.t.attrs = dict(long_name="temperature", units="°C")
     ds.s.attrs = dict(long_name="salinity", units="psu")
     ds.depth.attrs = dict(long_name="depth", units="m")

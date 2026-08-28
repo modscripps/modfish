@@ -2,6 +2,7 @@
 # coding: utf-8
 """Utilities"""
 
+from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -146,9 +147,124 @@ def loadmat(filename, onevar=False, verbose=False):
 
 
 def parse_filename_datetime(file):
-    yy, mm, dd, time = file.stem.split("I")[1].split("_")
+    yy, mm, dd, time = file.stem[4:].split("_")
     dtstr = f"20{yy}-{mm}-{dd} {time[:2]}:{time[2:4]}:{time[4:6]}"
     return np.datetime64(dtstr)
+
+
+def process_file_path(path_input):
+    """
+    Validate and convert a file path input to a pathlib.Path object.
+
+    This function accepts either a string representing a path or an existing
+    pathlib.Path object. If a string is provided, it is converted to a Path
+    object.
+
+    Parameters
+    ----------
+    path_input : {pathlib.Path, str}
+        The file path input, which can be an absolute or relative path string,
+        or an existing Path object.
+
+    Returns
+    -------
+    pathlib.Path
+        The guaranteed Path object.
+
+    Raises
+    ------
+    TypeError
+        If the input is neither a pathlib.Path object nor a string (str).
+
+    Examples
+    --------
+    >>> from pathlib import Path
+    >>> # Input is a string
+    >>> process_file_path('/home/data/file.txt')
+    Path('/home/data/file.txt')
+
+    >>> # Input is already a Path object
+    >>> p = Path('temp.csv')
+    >>> process_file_path(p)
+    Path('temp.csv')
+    """
+    if isinstance(path_input, Path):
+        file_path = path_input
+
+    elif isinstance(path_input, str):
+        file_path = Path(path_input)
+
+    else:
+        raise TypeError(
+            f"Input must be a pathlib.Path object or a string (str), "
+            f"not {type(path_input).__name__}"
+        )
+
+    return file_path
+
+
+def datetime_linspace(start_time, end_time, n_points):
+    """Generates a NumPy array of n linearly spaced datetime64 values.
+
+    The function determines the total duration between the start and end times,
+    generates n linearly spaced fractions of this duration, and adds them
+    to the start time.
+
+    Parameters
+    ----------
+    start_time : numpy.datetime64
+        The starting time. Must be less than or equal to `end_time`.
+    end_time : numpy.datetime64
+        The ending time.
+    n_points : int
+        The number of linearly spaced points to generate. Must be >= 2.
+
+    Returns
+    -------
+    numpy.ndarray
+        A 1D array of datetime64 values with the same unit as the input times.
+
+    Raises
+    ------
+    ValueError
+        If `start_time` is greater than `end_time`.
+        If `n_points` is less than 2.
+
+    Examples
+    --------
+    >>> start = np.datetime64('2025-01-01T10:00:00')
+    >>> end = np.datetime64('2025-01-01T10:06:00')
+    >>> vec = datetime_linspace(start, end, 4)
+    >>> print(vec)
+    ['2025-01-01T10:00:00' '2025-01-01T10:02:00'
+     '2025-01-01T10:04:00' '2025-01-01T10:06:00']
+    """
+    if start_time > end_time:
+        raise ValueError("start_time must be less than or equal to end_time.")
+    if n_points < 2:
+        raise ValueError("n_points must be 2 or greater for linspace.")
+
+    # Calculate the total duration
+    total_duration = end_time - start_time
+
+    # Extract the base unit (e.g., 's', 'ms', 'ns') and convert to an integer
+    # This gets the magnitude of the timedelta in its finest resolution.
+    duration_as_int = total_duration.astype(np.int64)
+
+    # Generate n linearly spaced integers from 0 to the total duration magnitude
+    # This represents the step size in the time unit
+    step_magnitudes = np.linspace(0, duration_as_int, n_points, dtype=np.int64)
+
+    # Convert the integer magnitudes back to timedelta64 objects
+    # We create a scalar timedelta of 1 unit and multiply the vector
+    # This automatically retains the original time unit of the duration.
+    one_unit_timedelta = total_duration.astype('timedelta64[us]') / duration_as_int
+    time_deltas = step_magnitudes * one_unit_timedelta
+
+    # Add the time deltas to the start time
+    datetime_vector = start_time + time_deltas
+
+    return datetime_vector
 
 
 # -----------------------------------------
