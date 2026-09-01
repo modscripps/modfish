@@ -28,8 +28,9 @@ dependencies = [
     "gsw>=3.6",
     "numpy>=2.1",
     "scipy>=1.12",
-    "xarray>=2024.1.0",
+    "xarray>=2025.1",
     "pandas>=2.0",
+    "netcdf4>=1.7",
 ]
 
 [project.urls]
