@@ -15,8 +15,12 @@ import xarray as xr
 from .header import read_body
 
 
-#: `$GPZDA,hhmmss.ss,dd,mm,yyyy`, the GPS UTC time sentence.
-_ZDA = re.compile(rb"\$GPZDA,(\d{6}\.\d+),(\d{2}),(\d{2}),(\d{4})")
+#: `$GPZDA,hhmmss.ss,dd,mm,yyyy`, the GPS UTC time sentence. 2024-format files
+#: (e.g. `skq202417s`) use the `$INZDA` talker prefix instead of `$GPZDA` for
+#: the same sentence (same fields, observed against
+#: EPSI24_11_26_102923.modraw), so both are accepted here, mirroring `_GGA`
+#: below which already accepted both prefixes.
+_ZDA = re.compile(rb"\$(?:GP|IN)ZDA,(\d{6}\.\d+),(\d{2}),(\d{2}),(\d{4})")
 
 #: `$GPGGA,hhmmss.ss,ddmm.mmmm,N/S,dddmm.mmmm,E/W`, the GPS position sentence.
 #: NMEA payloads cannot contain `$`, so regexing the ASCII GPS stream directly
