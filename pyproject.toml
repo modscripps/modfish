@@ -50,6 +50,9 @@ Changelog = "https://github.com/modscripps/modfish/blob/main/HISTORY.md"
 # filterwarnings = ["error"]
 # log_cli_level = "info"
 testpaths = ["tests"]
+markers = [
+    "slow: cross-validation against the mod-server mount and the rust reader; skips when either is unavailable",
+]
 
 [dependency-groups]
 dev = [
