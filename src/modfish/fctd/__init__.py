@@ -7,6 +7,15 @@ only in `process_deployment` and in the caller. See
 `plans/2026-09-01-fctd-pipeline-design.md` for the design.
 """
 
+from modfish.fctd.casts import casts_to_dataset, find_casts, label_casts
 from modfish.fctd.config import CastParams, FCTDConfig, GridParams, TCParams
 
-__all__ = ["FCTDConfig", "CastParams", "TCParams", "GridParams"]
+__all__ = [
+    "CastParams",
+    "FCTDConfig",
+    "GridParams",
+    "TCParams",
+    "casts_to_dataset",
+    "find_casts",
+    "label_casts",
+]
