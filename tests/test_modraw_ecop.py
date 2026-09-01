@@ -33,3 +33,17 @@ def test_decode_ecop_all_blocks_one_record_each(ecop_packets):
     dt = np.diff(ds.time.values).astype("timedelta64[ns]").astype(float) / 1e9
     assert np.median(dt) == pytest.approx(0.031, rel=0.1)
     assert (dt >= 0).all()  # sorted, duplicates allowed
+
+
+def test_decode_ecop_garbage_payload_produces_nan(ecop_packets):
+    # Regression test: garbage payloads (binary instead of ASCII hex) should
+    # produce NaN rows, not zeros, so they are distinguishable from legitimate
+    # low readings downstream.
+    ds = decode_ecop(ecop_packets)
+    # Packet at index 165 is known to have binary garbage data
+    assert np.isnan(ds.bb_raw[165].values)
+    assert np.isnan(ds.chla_raw[165].values)
+    assert np.isnan(ds.fdom_raw[165].values)
+    assert np.isnan(ds.bb[165].values)
+    assert np.isnan(ds.chla[165].values)
+    assert np.isnan(ds.fdom[165].values)

@@ -47,10 +47,16 @@ def decode_ecop(packets: list[Packet]) -> xr.Dataset:
     ds : xr.Dataset
         Fluorometer time series. Carries the raw counts alongside normalized
         variables: `bb`, `chla`, `fdom` (normalized) and `bb_raw`, `chla_raw`,
-        `fdom_raw` (counts, uint16). Dimension `time` has length equal to the
-        number of ECOP packets with a valid 28-character payload.
+        `fdom_raw` (counts, float to preserve NaN). Dimension `time` has length
+        equal to the number of ECOP packets with a valid 28-character payload.
         `ds.attrs["n_bad_length"]` counts payloads whose length is not 28;
-        those payloads are skipped.
+        those payloads are skipped. Payloads with binary garbage instead of
+        ASCII hex produce NaN rows (all fields NaN, including time).
+
+    Raises
+    ------
+    ValueError
+        If no packet yields a usable record.
 
     Notes
     -----
@@ -78,12 +84,12 @@ def decode_ecop(packets: list[Packet]) -> xr.Dataset:
     if not ts:
         raise ValueError("no usable ECOP blocks")
 
-    ts = np.concatenate(ts).astype(np.uint64)
-    bb_raw = np.concatenate(bb_raw).astype(np.uint16)
-    chla_raw = np.concatenate(chla_raw).astype(np.uint16)
-    fdom_raw = np.concatenate(fdom_raw).astype(np.uint16)
+    ts = np.concatenate(ts)
+    bb_raw = np.concatenate(bb_raw)
+    chla_raw = np.concatenate(chla_raw)
+    fdom_raw = np.concatenate(fdom_raw)
 
-    # Convert timestamp to datetime64[ns]
+    # Convert timestamp to datetime64[ns]. NaN timestamps produce NaT.
     time = pd.to_datetime(ts, unit="ms").values.astype("datetime64[ns]")
 
     # Compute normalized values per Matlab v4 lines 2001-2003
