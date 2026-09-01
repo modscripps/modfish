@@ -6,3 +6,7 @@ Stages are pure functions (Dataset/DataTree in and out); file I/O happens
 only in `process_deployment` and in the caller. See
 `plans/2026-09-01-fctd-pipeline-design.md` for the design.
 """
+
+from modfish.fctd.config import CastParams, FCTDConfig, GridParams, TCParams
+
+__all__ = ["FCTDConfig", "CastParams", "TCParams", "GridParams"]
