@@ -83,14 +83,15 @@ This shared layout is built once into a `tag` struct in `mod_som_read_epsi_files
 | `ECOP` | Tridente fluorometer / backscatter sensor | 16 Hz per the Matlab reader (hardcoded); MOTIVE 2025 files actually carry ~32 blocks/s, with duplicated timestamps between blocks and occasional binary-garbage payloads (decode to NaN instead of a record) | 1 | 16 hex-char timestamp + 12 ASCII-hex chars = three 4-hex-char (16-bit) raw counts: `bb` (backscatter), `chla`, `fDOM`, each normalized `(raw/65535 - 0.5)/scale` |
 | `TTV1`/`TTV2`/`TTV3` | Travel-time flow meter (up to 3 transducer pairs) | 16 Hz | 10 | Repeating records: 16 hex-char timestamp + 19-byte binary payload - see [TTV record layout](#ttv-record-layout) below |
 
-!!! warning "ALTI layout is a hypothesis, not a confirmed spec"
-    A search of 60+ `.modraw` files across both MOTIVE cruises (2024 and
-    2025) found no `$ALTI` (or other `ALT`-prefixed) frame. The header-only
-    layout above, no payload, frame ending at the header checksum's
-    `*hh\r\n`, is read directly out of the Matlab v4 code but has never been
-    checked against a real `$ALTI` byte stream. `ALTI` is documented as "on
-    demand", so its absence may just mean no sampled deployment triggered
-    it.
+!!! warning "ALTI layout is an unverified hypothesis"
+    A search of ~700 `.modraw` files across both MOTIVE cruises (skq202521s:
+    all 98 EPSI25 files plus the first ~300 FCTD25 files; skq202417s: the
+    first 300 EPSI24 files) found no `$ALTI` (or other `ALT`-prefixed)
+    frame. The header-only layout above, no payload, frame ending at the
+    header checksum's `*hh\r\n`, is read directly out of the Matlab v4 code
+    but has never been checked against a real `$ALTI` byte stream. `ALTI`
+    is documented as "on demand", so its absence may just mean no sampled
+    deployment triggered it.
 
 ### APF metadata header (`APF0`/`APF1`)
 
