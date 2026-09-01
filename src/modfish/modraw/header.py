@@ -8,7 +8,6 @@ calibration coefficients for the SBE49 CTD.
 """
 
 import re
-from pathlib import Path
 
 
 #: SBE49 calibration coefficients as they are named in the header.

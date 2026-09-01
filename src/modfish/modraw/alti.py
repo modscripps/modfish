@@ -10,7 +10,6 @@ purely on Matlab v4 semantics (lines 674-709 of `mod_som_read_epsi_files_v4.m`).
 """
 
 import numpy as np
-import pandas as pd
 import xarray as xr
 
 from .framer import Packet

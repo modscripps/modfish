@@ -51,7 +51,11 @@ def decode_ecop(packets: list[Packet]) -> xr.Dataset:
         equal to the number of ECOP packets with a valid 28-character payload.
         `ds.attrs["n_bad_length"]` counts payloads whose length is not 28;
         those payloads are skipped. Payloads with binary garbage instead of
-        ASCII hex produce NaN rows (all fields NaN, including time).
+        ASCII hex produce NaN data fields (`bb_raw`, `chla_raw`, `fdom_raw`
+        and the normalized `bb`, `chla`, `fdom`); the timestamp bytes can
+        still happen to decode as valid hex, so `time` for a garbage row is
+        not reliably NaT. Filter garbage rows on the NaN data values, not
+        on `time`.
 
     Raises
     ------
