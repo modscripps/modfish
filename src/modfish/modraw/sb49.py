@@ -215,7 +215,11 @@ def load_ctd(file):
     the 40-character SBE49 record length. `n_bad_checksum` now comes from
     `framer.FrameStats` and counts trailing XOR checksum failures across
     *all* tags in the framed body, not just `$SB49` as before. Both being
-    zero means the telemetry was clean.
+    zero means no length- or checksum-anomalous SB49 records were found.
+    It does not mean the framing was clean end to end: a corrupted length
+    field that never produces a valid trailer yields no `Packet` at all, so
+    the scanner resyncs past it without either counter seeing it (see
+    `framer.FrameStats.n_resync`, not surfaced here).
     """
     file = Path(file)
     head = read_header(file)
