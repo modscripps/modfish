@@ -64,7 +64,7 @@ class Packet:
 @dataclasses.dataclass
 class FrameStats:
     n_frames: int = 0
-    n_resync: int = 0  # bytes skipped hunting for a valid frame
+    n_resync: int = 0  # failed frame attempts (rejected $ anchors), not bytes skipped
     n_bad_checksum: int = 0  # trailing XOR mismatches
     tag_counts: dict[str, int] = dataclasses.field(default_factory=dict)
 
@@ -192,8 +192,9 @@ def frame(body):
         Every frame decoded, in stream order. Frames with a bad trailing
         checksum are still included; see `stats.n_bad_checksum`.
     stats : FrameStats
-        Counters describing the scan: frames found, bytes skipped resyncing,
-        bad checksums, and a per-tag count.
+        Counters describing the scan: frames found, failed frame attempts
+        (rejected `$` anchors, `n_resync`), bad checksums, and a per-tag
+        count.
     """
     packets = []
     stats = FrameStats()
@@ -222,6 +223,15 @@ def block_counts(file, tags=("SB49", "EFE4", "VNAV", "VNMAR", "ECOP", "ALTI", "G
     """Count the blocks of each stream in a .modraw file.
 
     A quick way to see which sensors were writing to a file, and at what rate.
+
+    Scans only `header.read_body()`'s output, i.e. past the file's declared
+    header span. That declared span can fall *inside* the block stream
+    rather than before it (see the caution in this module's docstring), in
+    which case frames written before the boundary are excluded here. Counts
+    returned by this function can therefore come out lower than the
+    `n_blocks_<TAG>` attrs `modfish.modraw.reader.read()` reports for the
+    same file, since `read()` frames the whole file instead of
+    `read_body()`'s output.
 
     Parameters
     ----------

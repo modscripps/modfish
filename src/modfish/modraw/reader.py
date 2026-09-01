@@ -13,6 +13,7 @@ whatever sat before the (wrongly) declared header end.
 """
 
 import collections
+import logging
 from pathlib import Path
 
 import numpy as np
@@ -26,6 +27,8 @@ from .framer import frame
 from .gps import decode_gga
 from .header import header_setup, parse_dcal, parse_som3, read_header, sbe49_cal
 from .sb49 import decode_sb49
+
+logger = logging.getLogger(__name__)
 
 
 def read(file):
@@ -71,7 +74,9 @@ def read(file):
           rather than float so the missing marker cannot be confused with a
           real value near zero; see `comment` in its attrs).
         - `block_time` : datetime64[ns], the frame's own hex header
-          timestamp.
+          timestamp; NaT where that timestamp overflows pandas' nanosecond
+          range (a corrupt-but-otherwise-well-framed block, e.g. one bit
+          flipped in the hex digits).
         - `block_tag` : str, the frame's SOM tag (`"SB49"`, `"EFE4"`, ...).
 
         Root attrs:
@@ -111,12 +116,24 @@ def read(file):
         cal = parse_dcal(by_tag["DCAL"][0].payload)
 
     groups = {}
-    if by_tag.get("SB49") and cal:
-        groups["ctd"] = decode_sb49(by_tag["SB49"], cal)
-        groups["ctd"].attrs.update(cal)
-    if by_tag.get("EFE4") and by_tag.get("SOM3"):
-        meta = parse_som3(by_tag["SOM3"][0].payload)
-        groups["efe"] = decode_efe4(by_tag["EFE4"], meta)
+    if by_tag.get("SB49"):
+        if cal:
+            groups["ctd"] = decode_sb49(by_tag["SB49"], cal)
+            groups["ctd"].attrs.update(cal)
+        else:
+            logger.warning(
+                "file has %d SB49 blocks but no calibration coefficients; ctd group omitted",
+                len(by_tag["SB49"]),
+            )
+    if by_tag.get("EFE4"):
+        if by_tag.get("SOM3"):
+            meta = parse_som3(by_tag["SOM3"][0].payload)
+            groups["efe"] = decode_efe4(by_tag["EFE4"], meta)
+        else:
+            logger.warning(
+                "file has %d EFE4 blocks but no SOM3 channel setup; efe group omitted",
+                len(by_tag["EFE4"]),
+            )
     if by_tag.get("ECOP"):
         groups["ecop"] = decode_ecop(by_tag["ECOP"])
     gga = decode_gga(body)
@@ -137,7 +154,12 @@ def read(file):
                     dtype="int64",
                 ),
             ),
-            block_time=("block", pd.to_datetime([p.timestamp_ms for p in packets], unit="ms").values),
+            block_time=(
+                "block",
+                pd.to_datetime(
+                    [p.timestamp_ms for p in packets], unit="ms", errors="coerce"
+                ).values,
+            ),
             block_tag=("block", np.array([p.tag for p in packets])),
         ),
     )
@@ -146,7 +168,10 @@ def read(file):
         units="centiseconds",
         comment="-1 where the frame had no T-prefix laptop-clock stamp",
     )
-    root.block_time.attrs = dict(long_name="block header timestamp")
+    root.block_time.attrs = dict(
+        long_name="block header timestamp",
+        comment="NaT where the hex timestamp overflows pandas' nanosecond range",
+    )
     root.block_tag.attrs = dict(long_name="SOM frame tag")
 
     tree = xr.DataTree.from_dict({"/": root, **{f"/{k}": v for k, v in groups.items()}})

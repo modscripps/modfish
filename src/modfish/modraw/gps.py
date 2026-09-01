@@ -3,7 +3,9 @@
 """
 GPS time extraction from `.modraw` files.
 
-Parses GPZDA sentences from the GPS stream to extract absolute UTC timestamps.
+Parses $GPZDA sentences (and $INZDA, the talker prefix 2024-format files use
+for the same sentence) from the GPS stream to extract absolute UTC
+timestamps.
 """
 
 import re
@@ -45,7 +47,7 @@ def load_gps_time(file):
     Returns
     -------
     time : pd.DatetimeIndex
-        UTC times from the `$GPZDA` sentences.
+        UTC times from the `$GPZDA`/`$INZDA` sentences.
     """
     out = []
     for match in _ZDA.finditer(read_body(file)):
@@ -60,10 +62,12 @@ def decode_gga(body: bytes) -> xr.Dataset:
     FCTD GPS sentences carry the ordinary `T<10-digit>` laptop-clock prefix
     used throughout `.modraw` files, not the hex acquisition timestamp that
     precedes binary SOM blocks; a GGA sentence's own `hhmmss.ss` field gives
-    only time-of-day, with no date. The date is instead taken from `$GPZDA`
-    sentences interleaved in the same stream: each GGA is paired with the
-    date of its nearest `$GPZDA` sentence by byte offset (so a GGA is dated
-    from whichever ZDA it fell closest to in the file, before or after).
+    only time-of-day, with no date. The date is instead taken from
+    `$GPZDA`/`$INZDA` sentences interleaved in the same stream: each GGA is
+    paired with the date of its nearest `$GPZDA`/`$INZDA` sentence by byte
+    offset (so a GGA is dated from whichever ZDA it fell closest to in the
+    file, before or after).
+
     Combining that date with the GGA's time-of-day can land up to a day off
     right around midnight, when the nearest ZDA carries the other side of
     the rollover; this is corrected by shifting the combined timestamp by
@@ -77,7 +81,7 @@ def decode_gga(body: bytes) -> xr.Dataset:
         File bytes to search for GGA/ZDA sentences. `.modraw` files carry
         the GPS stream past the header, but a caller may pass full-file
         bytes here too, since the header region never contains a
-        `$GPGGA`/`$GPZDA` sentence.
+        `$GPGGA`/`$GPZDA`/`$INZDA` sentence.
 
     Returns
     -------
@@ -89,8 +93,8 @@ def decode_gga(body: bytes) -> xr.Dataset:
     Raises
     ------
     ValueError
-        If `body` has `$GPGGA` sentences but no `$GPZDA` sentence to date
-        them from.
+        If `body` has `$GPGGA` sentences but no `$GPZDA`/`$INZDA` sentence
+        to date them from.
     """
     gga_matches = list(_GGA.finditer(body))
     if not gga_matches:
@@ -104,7 +108,7 @@ def decode_gga(body: bytes) -> xr.Dataset:
 
     zda_matches = list(_ZDA.finditer(body))
     if not zda_matches:
-        raise ValueError("$GPGGA sentences present but no $GPZDA sentence to date them from")
+        raise ValueError("$GPGGA sentences present but no $GPZDA/$INZDA sentence to date them from")
 
     zda_offsets = np.array([m.start() for m in zda_matches])
     zda_timestamps = []
