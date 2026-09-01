@@ -34,5 +34,5 @@ __author__ = """Gunnar Voet"""
 __email__ = "gvoet@ucsd.edu"
 __version__ = importlib.metadata.version("modfish")
 
-__all__ = ["io", "fctd", "modraw", "utils"]
-from . import io, fctd, modraw, utils
+__all__ = ["io", "fctd", "modraw", "tc", "utils"]
+from . import io, fctd, modraw, tc, utils
