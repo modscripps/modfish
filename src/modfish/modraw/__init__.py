@@ -18,8 +18,10 @@ every tag, including the corrections logged below, lives in
 
 The header's declared length is not a safe boundary to skip to: on a MOTIVE
 2025 fixture its declared size (7069 bytes) falls inside the block stream,
-ahead of `$SB49`, `$EFE4`, and `$ECOP` frames still to come. `read()`
-therefore frames the whole file instead of trusting the header.
+after leading `$SOM3`/`$DCAL` and early `$SB49`/`$EFE4`/`$ECOP` frames that
+sit before that boundary. A reader that skips straight to the declared
+length silently drops them. `read()` therefore frames the whole file instead
+of trusting the header.
 
 ## Streams and groups
 
