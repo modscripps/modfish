@@ -1,28 +1,10 @@
 #!/usr/bin/env python
 # coding: utf-8
 """
-Reading `.modraw` files written by the MOD acquisition software.
+SBE49 CTD data parsing and conversion for `.modraw` files.
 
-A `.modraw` file is ASCII. It opens with a header, whose length in bytes is
-given on its very first line, and continues with a stream of blocks, one per
-sensor, of the form
-
-```
-T<host ticks>$<TAG><16 hex timestamp><8 hex length>*<chk><data>*<chk>\\r\\n
-```
-
-Only the SBE49 CTD stream (`$SB49`) is decoded here. Its payload is a whole
-number of 40-character records: a 16-hex millisecond timestamp followed by the
-SBE49 output-format-24 frame, `TTTTTTCCCCCCPPPPPPtttt`, plus two trailing
-characters that the Matlab reader discards.
-
-This module follows
-`MOD_fish_lib/EPSILOMETER/epsilib/mod_som_read_epsi_files_v4.m`, including its
-SBE49 calibration polynomials, and adds a per-block checksum check that the
-Matlab reader does not do.
-
-Rudimentary on purpose; see
-[issue #13](https://github.com/modscripps/modfish/issues/13).
+Handles SBE49 output-format-24 frames and provides functions for reading and
+processing the CTD time series.
 """
 
 import re
@@ -32,17 +14,11 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
+from .header import read_header, read_body, sbe49_cal, header_setup
+
+
 #: One SBE49 block, from the tag to the trailing checksum.
 _SB49 = re.compile(rb"\$SB49([\s\S]+?)\*([0-9A-Fa-f]{2})\r\n")
-
-#: `$GPZDA,hhmmss.ss,dd,mm,yyyy`, the GPS UTC time sentence.
-_ZDA = re.compile(rb"\$GPZDA,(\d{6}\.\d+),(\d{2}),(\d{2}),(\d{4})")
-
-#: SBE49 calibration coefficients as they are named in the header.
-_CAL_KEYS = (
-    "TA0 TA1 TA2 TA3 CG CH CI CJ CTCOR CPCOR PA0 PA1 PA2 "
-    "PTCA0 PTCA1 PTCA2 PTCB0 PTCB1 PTCB2 PTEMPA0 PTEMPA1 PTEMPA2"
-).split()
 
 #: Length in characters of one SBE49 record: 16 timestamp + 24 data.
 _REC_LEN = 40
@@ -52,90 +28,34 @@ _REC_LEN = 40
 _DATA_OFFSET = 27
 
 
-def read_header(file):
-    """Read the header of a .modraw file.
-
-    The header length in bytes is given on the first line of the file.
+def _hex_columns(chars, i0, i1):
+    """Decode columns `i0:i1` of a character array as hexadecimal integers.
 
     Parameters
     ----------
-    file : Path or str
-        Path to a .modraw file.
+    chars : np.ndarray
+        Array of uint8 characters, shape (n records, record length).
+    i0, i1 : int
+        Column range to decode.
 
     Returns
     -------
-    head : str
-        Header text.
+    out : np.ndarray
+        Decoded values, NaN where a character was not hexadecimal.
     """
-    with open(file, "rb") as f:
-        nbytes = int(f.readline().split(b"=")[1])
-        f.seek(0)
-        return f.read(nbytes).decode("latin-1")
-
-
-def read_body(file):
-    """Read everything in a .modraw file after the header.
-
-    Parameters
-    ----------
-    file : Path or str
-        Path to a .modraw file.
-
-    Returns
-    -------
-    body : bytes
-        File contents past the header.
-    """
-    head = read_header(file)
-    with open(file, "rb") as f:
-        f.seek(len(head.encode("latin-1")))
-        return f.read()
-
-
-def header_setup(head):
-    """Extract the acquisition setup fields from a .modraw header.
-
-    Parameters
-    ----------
-    head : str
-        Header text as returned by `read_header`.
-
-    Returns
-    -------
-    setup : dict
-        Survey, vehicle, instrument serial number and the like. Keys are
-        lowercased and stripped of their `CTD.` prefix.
-    """
-    setup = {}
-    for key in ("survey", "experiment", "cruise", "vehicle", "fishflag", "SerialNum"):
-        m = re.search(rf"CTD\.{key}\s*=\s*'([^']*)'", head)
-        if m:
-            setup[key.lower()] = m.group(1)
-    m = re.search(r"GM_TIME\s*=\s*'([^']+)'", head)
-    if m:
-        setup["gm_time"] = m.group(1)
-    return setup
-
-
-def sbe49_cal(head):
-    """Extract the SBE49 calibration coefficients from a .modraw header.
-
-    Parameters
-    ----------
-    head : str
-        Header text as returned by `read_header`.
-
-    Returns
-    -------
-    cal : dict
-        Calibration coefficients, keys lowercased.
-    """
-    cal = {}
-    for key in _CAL_KEYS:
-        m = re.search(rf"^{key}\s*=\s*(\S+)", head, re.MULTILINE)
-        if m:
-            cal[key.lower()] = float(m.group(1))
-    return cal
+    sub = chars[:, i0:i1]
+    out = np.zeros(sub.shape[0], dtype=float)
+    ok = np.ones(sub.shape[0], dtype=bool)
+    for j in range(sub.shape[1]):
+        col = sub[:, j]
+        digit = np.full(col.shape, -1, dtype=np.int64)
+        digit = np.where((col >= 48) & (col <= 57), col - 48, digit)  # 0-9
+        digit = np.where((col >= 65) & (col <= 70), col - 55, digit)  # A-F
+        digit = np.where((col >= 97) & (col <= 102), col - 87, digit)  # a-f
+        ok &= digit >= 0
+        out = out * 16 + np.where(digit >= 0, digit, 0)
+    out[~ok] = np.nan
+    return out
 
 
 def sbe49_to_physical(t_raw, c_raw, p_raw, pt_raw, cal):
@@ -186,36 +106,6 @@ def sbe49_to_physical(t_raw, c_raw, p_raw, pt_raw, cal):
         1 + cal["ctcor"] * t + cal["cpcor"] * p
     )
     return t, c, p
-
-
-def _hex_columns(chars, i0, i1):
-    """Decode columns `i0:i1` of a character array as hexadecimal integers.
-
-    Parameters
-    ----------
-    chars : np.ndarray
-        Array of uint8 characters, shape (n records, record length).
-    i0, i1 : int
-        Column range to decode.
-
-    Returns
-    -------
-    out : np.ndarray
-        Decoded values, NaN where a character was not hexadecimal.
-    """
-    sub = chars[:, i0:i1]
-    out = np.zeros(sub.shape[0], dtype=float)
-    ok = np.ones(sub.shape[0], dtype=bool)
-    for j in range(sub.shape[1]):
-        col = sub[:, j]
-        digit = np.full(col.shape, -1, dtype=np.int64)
-        digit = np.where((col >= 48) & (col <= 57), col - 48, digit)  # 0-9
-        digit = np.where((col >= 65) & (col <= 70), col - 55, digit)  # A-F
-        digit = np.where((col >= 97) & (col <= 102), col - 87, digit)  # a-f
-        ok &= digit >= 0
-        out = out * 16 + np.where(digit >= 0, digit, 0)
-    out[~ok] = np.nan
-    return out
 
 
 def load_ctd(file):
@@ -350,47 +240,3 @@ def load_ctd_time_series(files):
     attrs["files"] = [part.attrs["file"] for part in parts]
     ds.attrs = attrs
     return ds
-
-
-def load_gps_time(file):
-    """Read the GPS UTC timestamps interleaved in a .modraw file.
-
-    Useful as an absolute reference against the acquisition computer's clock,
-    which is what the file names and the header `GM_TIME` are based on.
-
-    Parameters
-    ----------
-    file : Path or str
-        Path to a .modraw file.
-
-    Returns
-    -------
-    time : pd.DatetimeIndex
-        UTC times from the `$GPZDA` sentences.
-    """
-    out = []
-    for match in _ZDA.finditer(read_body(file)):
-        hms, day, month, year = (g.decode() for g in match.groups())
-        out.append(pd.Timestamp(f"{year}-{month}-{day} {hms[:2]}:{hms[2:4]}:{hms[4:]}"))
-    return pd.DatetimeIndex(out)
-
-
-def block_counts(file, tags=("SB49", "EFE4", "VNAV", "VNMAR", "ECOP", "ALTI", "GPZDA")):
-    """Count the blocks of each stream in a .modraw file.
-
-    A quick way to see which sensors were writing to a file, and at what rate.
-
-    Parameters
-    ----------
-    file : Path or str
-        Path to a .modraw file.
-    tags : iterable of str, optional
-        Stream tags to count.
-
-    Returns
-    -------
-    counts : dict
-        Number of occurrences of each tag.
-    """
-    body = read_body(file)
-    return {tag: len(re.findall(rb"\$" + tag.encode(), body)) for tag in tags}
