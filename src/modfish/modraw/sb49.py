@@ -7,25 +7,18 @@ Handles SBE49 output-format-24 frames and provides functions for reading and
 processing the CTD time series.
 """
 
-import re
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import xarray as xr
 
-from .header import read_header, read_body, sbe49_cal, header_setup
+from .framer import Packet, frame
+from .header import header_setup, read_body, read_header, sbe49_cal
 
-
-#: One SBE49 block, from the tag to the trailing checksum.
-_SB49 = re.compile(rb"\$SB49([\s\S]+?)\*([0-9A-Fa-f]{2})\r\n")
 
 #: Length in characters of one SBE49 record: 16 timestamp + 24 data.
 _REC_LEN = 40
-
-#: Character offset of the payload within a block, past `$SB49`, the 16
-#: character timestamp, the 8 character length and the 3 character `*XX`.
-_DATA_OFFSET = 27
 
 
 def _hex_columns(chars, i0, i1):
@@ -108,55 +101,46 @@ def sbe49_to_physical(t_raw, c_raw, p_raw, pt_raw, cal):
     return t, c, p
 
 
-def load_ctd(file):
-    """Read the SBE49 CTD time series from one .modraw file.
+def decode_sb49(packets: list[Packet], cal: dict) -> xr.Dataset:
+    """Decode framed SBE49 packets into a CTD time series.
 
     Parameters
     ----------
-    file : Path or str
-        Path to a .modraw file.
+    packets : list of Packet
+        `$SB49` packets as returned by `modfish.modraw.framer.frame` (already
+        filtered to `tag == "SB49"`; passing packets of other tags produces
+        garbage, since their payload does not follow the SBE49 record
+        layout).
+    cal : dict
+        SBE49 calibration coefficients, as returned by `sbe49_cal` or
+        `parse_dcal`.
 
     Returns
     -------
     ds : xr.Dataset
         CTD time series at the SBE49 sample rate, usually 16 Hz. Carries the
         raw counts alongside the converted variables, so that frames the
-        instrument returned as zero can be told apart from real values. Header
-        setup fields and per-file block tallies are in `ds.attrs`.
+        instrument returned as zero can be told apart from real values.
+        `ds.attrs["n_bad_length"]` counts payloads whose length is not a
+        multiple of the 40-character record length; those payloads are
+        skipped.
 
-    Notes
-    -----
-    `n_bad_length` counts blocks whose payload does not match the length in
-    their own header, `n_bad_checksum` those failing the XOR checksum over the
-    payload. Both being zero means the telemetry was clean.
+    Raises
+    ------
+    ValueError
+        If no packet yields a usable record, or if the median timestamp
+        looks like uptime rather than epoch milliseconds (not yet supported).
     """
-    file = Path(file)
-    head = read_header(file)
-    cal = sbe49_cal(head)
-    if not cal:
-        raise ValueError(f"no SBE49 calibration coefficients in the header of {file}")
-    body = read_body(file)
-
-    n_block = n_bad_length = n_bad_checksum = 0
+    n_bad_length = 0
     ts, t_raw, c_raw, p_raw, pt_raw = [], [], [], [], []
-    for match in _SB49.finditer(body):
-        n_block += 1
-        block, checksum = match.group(1), match.group(2)
-        try:
-            nchar = int(block[16:24], 16)
-        except ValueError:
+    for packet in packets:
+        data = packet.payload
+        if len(data) % _REC_LEN != 0:
             n_bad_length += 1
             continue
-        data = block[_DATA_OFFSET:]
-        if len(data) != nchar or nchar % _REC_LEN != 0:
-            n_bad_length += 1
-            continue
-        chk = 0
-        for byte in data:
-            chk ^= byte
-        if chk != int(checksum, 16):
-            n_bad_checksum += 1
-        chars = np.frombuffer(data, dtype=np.uint8).reshape(nchar // _REC_LEN, _REC_LEN)
+        chars = np.frombuffer(data, dtype=np.uint8).reshape(
+            len(data) // _REC_LEN, _REC_LEN
+        )
         ts.append(_hex_columns(chars, 0, 16))
         t_raw.append(_hex_columns(chars, 16, 22))
         c_raw.append(_hex_columns(chars, 22, 28))
@@ -164,7 +148,7 @@ def load_ctd(file):
         pt_raw.append(_hex_columns(chars, 34, 38))
 
     if not ts:
-        raise ValueError(f"no usable SB49 blocks in {file}")
+        raise ValueError("no usable SB49 blocks")
 
     ts = np.concatenate(ts)
     t_raw = np.concatenate(t_raw)
@@ -177,8 +161,8 @@ def load_ctd(file):
     # since 1970 and anything smaller as milliseconds since power on.
     if np.nanmedian(ts) < 1e9:
         raise ValueError(
-            f"{file} carries timestamps relative to power on, which are not "
-            "supported yet"
+            "SB49 packets carry timestamps relative to power on, which are "
+            "not supported yet"
         )
     time = pd.to_datetime(ts, unit="ms").values.astype("datetime64[ns]")
 
@@ -199,11 +183,52 @@ def load_ctd(file):
     ds.c.attrs = dict(long_name="conductivity", units="S/m")
     for name in ("t_raw", "c_raw", "p_raw", "pt_raw"):
         ds[name].attrs = dict(long_name=f"{name} counts", units="counts")
+    ds.attrs = dict(n_bad_length=n_bad_length)
+    return ds
+
+
+def load_ctd(file):
+    """Read the SBE49 CTD time series from one .modraw file.
+
+    Parameters
+    ----------
+    file : Path or str
+        Path to a .modraw file.
+
+    Returns
+    -------
+    ds : xr.Dataset
+        CTD time series at the SBE49 sample rate, usually 16 Hz. Carries the
+        raw counts alongside the converted variables, so that frames the
+        instrument returned as zero can be told apart from real values. Header
+        setup fields and per-file block tallies are in `ds.attrs`.
+
+    Notes
+    -----
+    `load_ctd` frames only `read_body`'s output, not the whole file (see the
+    caution in `modfish.modraw.framer` about the header length declared in
+    this format sometimes falling inside the block stream). This keeps its
+    output byte-for-byte compatible with earlier versions; a whole-file
+    reader is a separate concern.
+
+    `n_bad_length` counts blocks whose payload length is not a multiple of
+    the 40-character SBE49 record length. `n_bad_checksum` now comes from
+    `framer.FrameStats` and counts trailing XOR checksum failures across
+    *all* tags in the framed body, not just `$SB49` as before. Both being
+    zero means the telemetry was clean.
+    """
+    file = Path(file)
+    head = read_header(file)
+    cal = sbe49_cal(head)
+    if not cal:
+        raise ValueError(f"no SBE49 calibration coefficients in the header of {file}")
+    packets, stats = frame(read_body(file))
+    ds = decode_sb49([p for p in packets if p.tag == "SB49"], cal)
     ds.attrs = dict(
         file=file.name,
-        n_block=n_block,
-        n_bad_length=n_bad_length,
-        n_bad_checksum=n_bad_checksum,
+        n_block=stats.tag_counts.get("SB49", 0),
+        n_bad_length=ds.attrs.get("n_bad_length", 0),
+        n_bad_checksum=stats.n_bad_checksum,
         **header_setup(head),
     )
     return ds
