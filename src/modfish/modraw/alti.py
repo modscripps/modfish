@@ -74,7 +74,9 @@ def decode_alti(packets: list[Packet]) -> xr.Dataset:
     ds.dst.attrs = dict(
         units="m",
         long_name="altimeter distance",
-        comment="Assumes 1500 m/s sound speed per Matlab v4 implementation"
+        comment="Assumes 1500 m/s sound speed per Matlab v4 implementation. "
+                "Frame layout is unverified against real bytes; no ALTI frames "
+                "found in sampled MOTIVE modraw files."
     )
 
     return ds
