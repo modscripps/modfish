@@ -30,6 +30,7 @@ from .sb49 import sbe49_to_physical, load_ctd, load_ctd_time_series
 from .gps import load_gps_time
 from .framer import block_counts
 from .reader import read
+from .convert import convert
 
 __all__ = [
     "read_header",
@@ -42,4 +43,5 @@ __all__ = [
     "load_gps_time",
     "block_counts",
     "read",
+    "convert",
 ]
