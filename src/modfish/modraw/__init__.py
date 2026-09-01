@@ -25,11 +25,10 @@ Rudimentary on purpose; see
 [issue #13](https://github.com/modscripps/modfish/issues/13).
 """
 
-import re
-
 from .header import read_header, read_body, header_setup, sbe49_cal
 from .sb49 import sbe49_to_physical, load_ctd, load_ctd_time_series
 from .gps import load_gps_time
+from .framer import block_counts
 
 __all__ = [
     "read_header",
@@ -42,24 +41,3 @@ __all__ = [
     "load_gps_time",
     "block_counts",
 ]
-
-
-def block_counts(file, tags=("SB49", "EFE4", "VNAV", "VNMAR", "ECOP", "ALTI", "GPZDA")):
-    """Count the blocks of each stream in a .modraw file.
-
-    A quick way to see which sensors were writing to a file, and at what rate.
-
-    Parameters
-    ----------
-    file : Path or str
-        Path to a .modraw file.
-    tags : iterable of str, optional
-        Stream tags to count.
-
-    Returns
-    -------
-    counts : dict
-        Number of occurrences of each tag.
-    """
-    body = read_body(file)
-    return {tag: len(re.findall(rb"\$" + tag.encode(), body)) for tag in tags}
