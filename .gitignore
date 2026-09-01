@@ -39,3 +39,4 @@ pip-log.txt
 # uv
 uv.lock
 .venv
+.worktrees/
