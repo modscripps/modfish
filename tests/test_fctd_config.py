@@ -31,3 +31,13 @@ def test_from_yaml_roundtrip(tmp_path):
     cfg = FCTDConfig.from_yaml(p)
     assert cfg.tc.thermal_mass is True
     assert cfg.grid.dz == 1.0
+
+
+def test_from_dict_malformed_nested_section_raises():
+    with pytest.raises(ValueError, match="casts"):
+        FCTDConfig.from_dict({"casts": 5})
+
+
+def test_from_dict_nested_section_as_list_raises():
+    with pytest.raises(ValueError, match="tc"):
+        FCTDConfig.from_dict({"tc": ["smooth", 20]})

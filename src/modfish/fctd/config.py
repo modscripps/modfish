@@ -130,12 +130,15 @@ class FCTDConfig:
         Raises
         ------
         ValueError
-            If unknown keys are provided in any nested dictionary.
+            If unknown keys are provided or if nested sections are not dicts.
         """
-        # Known field names for each nested dataclass
-        cast_params_fields = {f.name for f in dataclasses.fields(CastParams)}
-        tc_params_fields = {f.name for f in dataclasses.fields(TCParams)}
-        grid_params_fields = {f.name for f in dataclasses.fields(GridParams)}
+        # Mapping of nested section names to their dataclass types and field sets
+        nested_sections = {
+            "casts": (CastParams, {f.name for f in dataclasses.fields(CastParams)}),
+            "tc": (TCParams, {f.name for f in dataclasses.fields(TCParams)}),
+            "grid": (GridParams, {f.name for f in dataclasses.fields(GridParams)}),
+        }
+
         fctd_config_fields = {f.name for f in dataclasses.fields(FCTDConfig)}
 
         # Check for unknown keys at top level
@@ -145,39 +148,35 @@ class FCTDConfig:
                 f"Unknown keys in FCTDConfig: {', '.join(sorted(top_level_unknown))}"
             )
 
-        # Process nested dictionaries and check for unknown keys
+        # Process nested sections and check for unknown keys
         result_kwargs = {}
 
-        if "casts" in d and isinstance(d["casts"], dict):
-            casts_dict = d["casts"]
-            unknown_casts = set(casts_dict.keys()) - cast_params_fields
-            if unknown_casts:
-                raise ValueError(
-                    f"Unknown keys in casts: {', '.join(sorted(unknown_casts))}"
-                )
-            result_kwargs["casts"] = CastParams(**casts_dict)
+        for section_name, (dataclass_type, field_names) in nested_sections.items():
+            if section_name in d:
+                section_value = d[section_name]
 
-        if "tc" in d and isinstance(d["tc"], dict):
-            tc_dict = d["tc"]
-            unknown_tc = set(tc_dict.keys()) - tc_params_fields
-            if unknown_tc:
-                raise ValueError(
-                    f"Unknown keys in tc: {', '.join(sorted(unknown_tc))}"
-                )
-            result_kwargs["tc"] = TCParams(**tc_dict)
+                # If None, skip (acceptable for optional sections)
+                if section_value is None:
+                    continue
 
-        if "grid" in d and isinstance(d["grid"], dict):
-            grid_dict = d["grid"]
-            unknown_grid = set(grid_dict.keys()) - grid_params_fields
-            if unknown_grid:
-                raise ValueError(
-                    f"Unknown keys in grid: {', '.join(sorted(unknown_grid))}"
-                )
-            result_kwargs["grid"] = GridParams(**grid_dict)
+                # Must be a dict; anything else is an error
+                if not isinstance(section_value, dict):
+                    raise ValueError(
+                        f"Expected {section_name} to be a dict, got {type(section_value).__name__}"
+                    )
+
+                # Check for unknown keys in this section
+                unknown_keys = set(section_value.keys()) - field_names
+                if unknown_keys:
+                    raise ValueError(
+                        f"Unknown keys in {section_name}: {', '.join(sorted(unknown_keys))}"
+                    )
+
+                result_kwargs[section_name] = dataclass_type(**section_value)
 
         # Process top-level scalar fields
         for field in dataclasses.fields(FCTDConfig):
-            if field.name in ("casts", "tc", "grid"):
+            if field.name in nested_sections:
                 continue  # Already processed above
             if field.name in d and not isinstance(d[field.name], dict):
                 result_kwargs[field.name] = d[field.name]
