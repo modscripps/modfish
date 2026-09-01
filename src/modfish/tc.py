@@ -550,3 +550,209 @@ def plot_spectra(spectra):
     ax3.plot(f, -np.arctan(2 * np.pi * f * tau1) - 2 * np.pi * f * L1, "k--")
 
     return ax
+
+
+def thermal_mass_correction(
+    ds: xr.Dataset, alpha: float = 0.03, beta: float = 1 / 7
+) -> xr.Dataset:
+    """Correct conductivity for the thermal mass of the conductivity cell.
+
+    A temperature change advecting past the conductivity cell heats or cools
+    the cell wall with a lag, which perturbs the conductivity reading. The
+    correction is a recursive filter (Lueck & Picklo, 1990) applied to the
+    temperature record and added back to conductivity.
+
+    Parameters
+    ----------
+    ds : xarray.Dataset
+        CTD time series with variables `t` [degC] and `c` on an evenly
+        sampled `time` coordinate of dtype datetime64. The sampling interval
+        is read from `time`, not assumed.
+    alpha : float, optional
+        Amplitude of the thermal anomaly. Defaults to 0.03, the SBE Data
+        Processing manual value for the SBE49. See Notes for alternatives.
+    beta : float, optional
+        Inverse relaxation time constant [1/s] of the thermal anomaly.
+        Defaults to 1/7 (SBE Data Processing manual). See Notes for
+        alternatives.
+
+    Returns
+    -------
+    out : xarray.Dataset
+        Deep copy of `ds` with `c` replaced by the thermal-mass-corrected
+        conductivity. `ds` itself is not modified.
+
+    Notes
+    -----
+    The discrete filter coefficients follow Lueck & Picklo (1990), not the
+    SBE Data Processing manual formula (both are quoted below for
+    reference); the two differ in how the sample rate enters the
+    coefficients. `alpha` and `beta` are picked from a Nyquist frequency
+    `fn = 1 / (2 * dt)` computed from the data's own time axis rather than a
+    fish-specific hardcoded value, which is what makes this function
+    fish-agnostic (for a 16 Hz record, `fn = 8`, matching the value gvpy
+    hardcoded for the SBE49-on-FCTD case this was ported from).
+
+    Choosing `alpha` and `beta` is the subject of the T-C correction analysis
+    (FCTD reprocessing sub-project 3). Values seen in the wild:
+
+    ==================================  =========  =========
+    source                              alpha      1/beta
+    ==================================  =========  =========
+    SBE Data Processing manual (SBE49)  0.03       7.0
+    Lueck & Picklo (1990)               0.02       0.10
+    dead MATLAB toolbox branch          0.02       0.10
+    ==================================  =========  =========
+
+    The SBE Data Processing manual formula, given for reference and not
+    used here:
+
+    .. math::
+
+        a &= \\frac{2 \\alpha}{\\Delta t \\, \\beta + 2} \\\\
+        b &= 1 - \\frac{2a}{\\alpha} \\\\
+        dc/dT &= 0.1 (1 + 0.006 (T - 20)) \\\\
+        \\mathrm{ctm}_i &= -b \\, \\mathrm{ctm}_{i-1} + a \\, (dc/dT)_i \\, dT_i
+
+    with `dT` the sample-to-sample temperature difference and `ctm` in S/m.
+    """
+    ds = ds.copy(deep=True)
+
+    dt = float(np.median(np.diff(ds.time.data)) / np.timedelta64(1, "s"))
+    fn = 1 / (2 * dt)
+    gamma = 0.1
+
+    T = ds.t.data
+    dTp = np.diff(T, prepend=T[0])
+    dTp[0] = dTp[1]
+    ctm = np.zeros_like(dTp)
+
+    aa = 4 * fn * alpha / beta / (1 + 4 * fn / beta)
+    bb = 1 - 2 * aa / alpha
+    for ii in range(1, len(ctm)):
+        ctm[ii] = -bb * ctm[ii - 1] + aa * gamma * dTp[ii]
+
+    ds["c"] = ds.c + ctm
+    return ds
+
+
+def viscous_heating_temperature_correction(
+    v, Pr: float = 15.0, scale: float = 2.0
+) -> np.ndarray:
+    r"""Temperature error from viscous heating of an unpumped sensor.
+
+    Flow past an unpumped thermistor dissipates kinetic energy at the sensor
+    surface, warming the reading. Ullman & Hebert (2014) give
+
+    .. math::
+
+        \Delta T = 0.8 \times 10^{-4} \, \mathrm{Pr}^{0.5} \, v^2
+
+    with flow speed `v` past the sensor [m/s] and Prandtl number `Pr`, the
+    ratio of momentum to thermal diffusivity, :math:`\mathcal{O}(10)` for
+    seawater.
+
+    Parameters
+    ----------
+    v : array-like
+        Flow speed past the sensor [m/s].
+    Pr : float, optional
+        Prandtl number. Defaults to 15.0.
+    scale : float, optional
+        Multiplicative factor applied to the Ullman & Hebert formula.
+        Defaults to 2.0, an undocumented empirical factor carried over from
+        the original code; its origin is not recorded.
+
+    Returns
+    -------
+    dT : numpy.ndarray
+        Temperature correction [degC], same shape as `v`.
+
+    Notes
+    -----
+    The Ullman & Hebert derivation is for an unpumped sensor. It is not
+    applicable to the pumped SBE49 and is off by default in the FCTD
+    pipeline.
+    """
+    v = np.asarray(v)
+    return scale * 0.8e-4 * Pr**0.5 * v**2
+
+
+def find_lags(ds: xr.Dataset, window: int = 80) -> tuple[np.ndarray, np.ndarray]:
+    """Estimate the time lag between temperature and conductivity by segment.
+
+    Temperature and conductivity are each differenced and cross-correlated
+    within short overlapping windows; the correlation peak within each
+    window is refined to sub-sample resolution with a quadratic fit. This
+    gives a lag time series that can reveal drift over a cast, unlike the
+    single lag `phase_correct` fits over the whole fit range.
+
+    Parameters
+    ----------
+    ds : xarray.Dataset
+        CTD time series with variables `t`, `c`, `dPdt` on an evenly sampled
+        `time` coordinate of dtype datetime64. The sampling interval is read
+        from `time`, not assumed.
+    window : int, optional
+        Number of samples per correlation window. Windows overlap by half.
+        Defaults to 80.
+
+    Returns
+    -------
+    lags : numpy.ndarray
+        Lag [s] for each window, positive meaning `t` lags `c`.
+    w : numpy.ndarray
+        Mean `dPdt` over each window, used as a proxy for fall speed.
+
+    Notes
+    -----
+    `correlate(ci, ti)` on its own (`ci`, `ti` the differenced, demeaned `c`
+    and `t` segments, gvpy `mod.py:1087-1092`) peaks at the negative of the
+    delay of `t` behind `c`: correlating a signal `a` against a copy `b`
+    delayed by `d` samples peaks at lag `-d`, confirmed independently with a
+    plain `numpy.roll` delay test. The sign is flipped here so the returned
+    lag matches the documented convention, positive meaning `t` lags `c`,
+    which is what `tests/test_tc.py::test_find_lags_recovers_known_lag` pins.
+    """
+    c = ds.c.data
+    t = ds.t.data
+    dpdt = ds.dPdt.data
+
+    dt = float(np.median(np.diff(ds.time.data)) / np.timedelta64(1, "s"))
+    freq = 1 / dt
+
+    def fit_2d_poly(lags, corrs):
+        # Fit the quadratic curve
+        coefficients = np.polyfit(lags, corrs, 2)
+        # Vertex of the parabola
+        vertex_x = -coefficients[1] / (2 * coefficients[0])
+        return vertex_x
+
+    def find_corrs(t, c, tr):
+        ci = np.diff(c[tr] - np.mean(c[tr]))
+        ti = np.diff(t[tr] - np.mean(t[tr]))
+        correlation = signal.correlate(ci - np.mean(ci), ti - np.mean(ti), mode="full")
+        lags = signal.correlation_lags(len(ci), len(ti), mode="full") * 1 / freq
+        lag = np.argmax(np.abs(correlation))
+        inds = range(lag - 1, lag + 2)
+        return lags[inds], correlation[inds]
+
+    t_lp = lowpassfilter(t, lowcut=1 / 4, fs=1)
+    c_lp = lowpassfilter(c, lowcut=1 / 4, fs=1)
+
+    n = len(t)
+    m = window
+    logger.info("%d scans, %d segments", n, n // (m // 2))
+
+    start_index = np.arange(0, n - m, m // 2)
+    lagi = []
+    wi = []
+    for si in start_index:
+        tr = range(si, si + window)
+        lags, corrs = find_corrs(t_lp, c_lp, tr)
+        # Sign flipped relative to the raw correlate() convention; see Notes.
+        lag = -fit_2d_poly(lags, corrs)
+        lagi.append(lag)
+        wi.append(np.mean(dpdt[tr]))
+
+    return np.array(lagi), np.array(wi)

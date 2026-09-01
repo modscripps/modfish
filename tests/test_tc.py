@@ -171,3 +171,40 @@ def test_lowpassfilter_removes_high_frequency():
     lp = tc.lowpassfilter(x, lowcut=1.0, fs=fs)
     resid = lp - np.sin(2 * np.pi * 0.1 * t)
     assert np.abs(resid[int(fs) : -int(fs)]).max() < 0.1
+
+
+def test_thermal_mass_correction_matches_reference_recursion():
+    ds = make_synthetic_ctd().isel(time=slice(0, 64))
+    alpha, beta = 0.03, 1 / 7
+    fn = 8.0  # Nyquist of the 16 Hz synthetic record
+    aa = 4 * fn * alpha / beta / (1 + 4 * fn / beta)
+    bb = 1 - 2 * aa / alpha
+    gamma = 0.1
+    # gvpy mod.py:1037-1039: forward diff with dTp[0] duplicated from dTp[1]
+    dTp = np.diff(ds.t.data, prepend=ds.t.data[0])
+    dTp[0] = dTp[1]
+    ctm = np.zeros_like(dTp)
+    for i in range(1, len(ctm)):
+        ctm[i] = -bb * ctm[i - 1] + aa * gamma * dTp[i]
+    out = tc.thermal_mass_correction(ds, alpha=alpha, beta=beta)
+    np.testing.assert_allclose(out.c.data, ds.c.data + ctm, rtol=1e-10)
+
+
+def test_thermal_mass_correction_does_not_mutate_input():
+    ds = make_synthetic_ctd().isel(time=slice(0, 64))
+    before = ds.c.data.copy()
+    tc.thermal_mass_correction(ds)
+    np.testing.assert_array_equal(ds.c.data, before)
+
+
+def test_viscous_heating_formula():
+    v = np.array([0.0, 1.0, 2.0])
+    dT = tc.viscous_heating_temperature_correction(v, Pr=15.0, scale=2.0)
+    np.testing.assert_allclose(dT, 2 * 0.8e-4 * np.sqrt(15.0) * v**2)
+
+
+def test_find_lags_recovers_known_lag():
+    ds = make_synthetic_ctd(tau=0.0, lag=4 / 16.0)  # pure 4-sample lag
+    lags, w = tc.find_lags(ds)
+    assert np.nanmedian(lags) == pytest.approx(4 / 16.0, abs=1 / 16.0)
+    assert len(lags) == len(w)
