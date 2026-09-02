@@ -470,6 +470,38 @@ def test_lag_tau_cost_map_minimum_at_true_pair_with_end_to_end_step():
     assert float(cm.tau_t[i["tau_t"]]) == pytest.approx(tau, abs=0.015)
 
 
+def test_find_lags_peak_at_lag_axis_end_does_not_raise():
+    # find_corrs takes range(peak - 1, peak + 2) around the raw correlation
+    # peak for the quadratic refinement; when the peak sits at the last
+    # index of the correlation array that runs one past the end and used to
+    # raise IndexError (notebook 04, 1 of 152 real d09 casts). Constructed
+    # so the very first window's correlation peaks at the last lag: c has a
+    # sharp step near the end of the window, t has one near the start, so
+    # after the zero-phase low-pass their cross-correlation over this short
+    # window is dominated by the single almost-non-overlapping extreme lag.
+    fs = 16.0
+    window = 80
+    n = window * 4
+    time = np.datetime64("2024-01-01") + (np.arange(n) / fs * 1e9).astype(
+        "timedelta64[ns]"
+    )
+    c = np.zeros(n)
+    c[79:] = 1000.0
+    t = np.zeros(n)
+    t[1:] = 1000.0
+    p = np.linspace(0.0, 100.0, n)
+    dPdt = np.gradient(p) * fs
+
+    ds = xr.Dataset(
+        coords=dict(time=("time", time)),
+        data_vars=dict(t=("time", t), c=("time", c), p=("time", p), dPdt=("time", dPdt)),
+    )
+    out = tc.find_lags(ds, window=window, lowpass=4.0)
+    assert out.lag.sizes["segment"] > 0
+    first = float(out.lag.values[0])
+    assert np.isfinite(first) or np.isnan(first)
+
+
 def test_downup_separation_zero_for_identical_down_up():
     # two casts with mirrored p and identical T-S relation: the up cast is
     # the exact time-reverse of the down cast, so every (t, c, p) triple

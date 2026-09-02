@@ -925,6 +925,13 @@ def find_lags(ds: xr.Dataset, window: int = 80, lowpass: float = 4.0) -> xr.Data
     plain `numpy.roll` delay test. The sign is flipped here so the returned
     lag matches the documented convention, positive meaning `t` lags `c`,
     which is what `tests/test_tc.py::test_find_lags_recovers_known_lag` pins.
+
+    The raw correlation peak is refined to sub-sample resolution with a
+    quadratic fit through the peak and its two neighbors. When the peak
+    sits at either end of the correlation array (window index 0 or the
+    last), there is no neighbor on one side to fit through; that window's
+    lag is returned as the raw (unrefined) peak lag instead of raising
+    `IndexError`.
     """
     c = ds.c.data
     t = ds.t.data
@@ -942,13 +949,17 @@ def find_lags(ds: xr.Dataset, window: int = 80, lowpass: float = 4.0) -> xr.Data
         return vertex_x
 
     def find_corrs(t, c, tr):
+        # Returns the final, sign-flipped lag estimate for one window (see
+        # Notes for the sign flip and the edge fallback).
         ci = np.diff(c[tr] - np.mean(c[tr]))
         ti = np.diff(t[tr] - np.mean(t[tr]))
         correlation = signal.correlate(ci - np.mean(ci), ti - np.mean(ti), mode="full")
         lags = signal.correlation_lags(len(ci), len(ti), mode="full") * 1 / freq
         lag = np.argmax(np.abs(correlation))
+        if lag == 0 or lag == len(correlation) - 1:
+            return -lags[lag]
         inds = range(lag - 1, lag + 2)
-        return lags[inds], correlation[inds]
+        return -fit_2d_poly(lags[inds], correlation[inds])
 
     t_lp = lowpassfilter(t, lowcut=lowpass, fs=freq)
     c_lp = lowpassfilter(c, lowcut=lowpass, fs=freq)
@@ -963,9 +974,7 @@ def find_lags(ds: xr.Dataset, window: int = 80, lowpass: float = 4.0) -> xr.Data
     pi = []
     for si in start_index:
         tr = range(si, si + window)
-        lags, corrs = find_corrs(t_lp, c_lp, tr)
-        # Sign flipped relative to the raw correlate() convention; see Notes.
-        lag = -fit_2d_poly(lags, corrs)
+        lag = find_corrs(t_lp, c_lp, tr)
         lagi.append(lag)
         dpdti.append(np.mean(dpdt[tr]))
         pi.append(np.mean(p[tr]))
