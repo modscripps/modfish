@@ -44,6 +44,14 @@ def test_l1_chain_stamps_processing_and_keeps_axis(l0_tree):
     assert "thermal mass" in ctd.c.attrs["processing"]
     assert "tau1" not in ctd.attrs
     assert np.isfinite(ctd.SP.data[:-2]).all()
+    # t/c attrs (units, long_name) must survive the correction chain, not
+    # just processing/corrections: a future _apply_tc that overwrote the
+    # pre-correction attrs wholesale, instead of merging processing on top
+    # of them, would pass every assertion above and still fail here.
+    assert ctd["t"].attrs.get("units") == ctd["t_raw"].attrs.get("units")
+    assert ctd["c"].attrs.get("units") == ctd["c_raw"].attrs.get("units")
+    assert ctd["t"].attrs.get("long_name") == ctd["t_raw"].attrs.get("long_name")
+    assert ctd["c"].attrs.get("long_name") == ctd["c_raw"].attrs.get("long_name")
 
 
 def test_l1_default_config_is_noop(l0_tree):

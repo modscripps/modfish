@@ -22,8 +22,8 @@ in 84 s. About 36 minutes for the module. `pyproject.toml` sets
 plain `uv run pytest tests/` skips this module, and running it requires
 `uv run pytest -m slow` explicitly.
 
-Comparison contract (task brief): corrections off (`phase_match=False`,
-`thermal_mass=False`), `latitude_fallback=30.0` (a no-op on both, each
+Comparison contract (task brief): corrections off (`TCParams()`, whose
+defaults are all no-ops), `latitude_fallback=30.0` (a no-op on both, each
 deployment has continuous GPS), `dz=0.5`, casts matched to Matlab grid
 columns by profile mean time. Matching is mutual-nearest, not one-sided
 nearest. On d11 the python product has 201 casts against the Matlab
