@@ -1,6 +1,7 @@
+import gsw
 import numpy as np
-import xarray as xr
 import pytest
+import xarray as xr
 
 from modfish import tc
 
@@ -203,9 +204,9 @@ def test_thermal_mass_correction_does_not_mutate_input():
 
 def test_find_lags_recovers_known_lag():
     ds = make_synthetic_ctd(tau=0.0, lag=4 / 16.0)  # pure 4-sample lag
-    lags, w = tc.find_lags(ds)
-    assert np.nanmedian(lags) == pytest.approx(4 / 16.0, abs=1 / 16.0)
-    assert len(lags) == len(w)
+    out = tc.find_lags(ds)
+    assert float(out.lag.median()) == pytest.approx(4 / 16.0, abs=1 / 16.0)
+    assert out.dPdt.sizes["segment"] == out.lag.sizes["segment"]
 
 
 def _clean_signal(ds):
@@ -301,3 +302,87 @@ def test_viscous_heating_formula_no_scale():
         tc.viscous_heating_temperature_correction(v, Pr=12.4),
         0.8e-4 * np.sqrt(12.4) * v**2,
     )
+
+
+def test_find_lags_returns_dataset_with_pressure():
+    ds = make_synthetic_ctd(tau=0.0, lag=4 / 16.0)
+    out = tc.find_lags(ds, lowpass=4.0)
+    assert set(out.data_vars) >= {"lag", "dPdt", "p"}
+    assert float(out.lag.median()) == pytest.approx(4 / 16.0, abs=1 / 16.0)
+
+
+def test_salinity_roughness_zero_for_smooth_profile():
+    ds = make_synthetic_ctd()
+    ds["SP"] = ("time", np.linspace(34.0, 35.0, ds.sizes["time"]))
+    assert tc.salinity_roughness(ds, 50, 600) == pytest.approx(0.0, abs=1e-9)
+
+
+def test_lag_tau_cost_map_minimum_at_true_pair():
+    # Review check 2026-09-02 on this record: minimum at lag 0.08, tau 0.07
+    # on a 0.01 s grid with the record ends excluded; 48 pairs run in 0.1 s.
+    tau, lag = 0.06, 0.08
+    ds = make_synthetic_ctd(tau=tau, lag=lag)
+    lags = np.arange(0.0, 0.16, 0.01)
+    taus = np.arange(0.0, 0.12, 0.01)
+    cm = tc.lag_tau_cost_map(ds, lags, taus, lowpass=4.0, pmin=50, pmax=600)
+    i = cm.cost.argmin(dim=("lag", "tau_t"))
+    assert float(cm.lag[i["lag"]]) == pytest.approx(lag, abs=0.015)
+    assert float(cm.tau_t[i["tau_t"]]) == pytest.approx(tau, abs=0.015)
+
+
+def test_downup_separation_zero_for_identical_down_up():
+    # two casts with mirrored p and identical T-S relation: the up cast is
+    # the exact time-reverse of the down cast, so every (t, c, p) triple
+    # (and therefore every (t, SP) pair) that occurs on the way down recurs
+    # on the way up; binning by temperature must then give the same mean SP
+    # per bin on both sides.
+    down = make_synthetic_ctd(minutes=4)
+    n = down.sizes["time"]
+    dt = down.time.data[1] - down.time.data[0]
+
+    up_time = down.time.data[-1] + dt * (np.arange(n) + 1)
+    full_time = np.concatenate([down.time.data, up_time])
+    full_vars = {}
+    for v in ["t", "c", "p", "lon", "lat"]:
+        down_v = down[v].data
+        full_vars[v] = np.concatenate([down_v, down_v[::-1]])
+    full_vars["dPdt"] = np.gradient(full_vars["p"]) * 16.0
+
+    ds = xr.Dataset(
+        coords=dict(time=("time", full_time)),
+        data_vars={k: ("time", v) for k, v in full_vars.items()},
+    )
+    SP = gsw.SP_from_C(10 * ds.c.data, ds.t.data, ds.p.data)
+    ds = ds.assign(SP=("time", SP))
+    ds = ds.assign_coords(cast=("time", np.concatenate([np.full(n, 1), np.full(n, 2)])))
+
+    casts = xr.Dataset(
+        data_vars=dict(
+            start_time=("cast", [full_time[0], full_time[n]]),
+            end_time=("cast", [full_time[n - 1], full_time[-1]]),
+            direction=("cast", ["down", "up"]),
+        ),
+        coords=dict(cast=("cast", [1, 2])),
+    )
+
+    tbins = np.linspace(ds.t.min().item(), ds.t.max().item(), 20)
+    out = tc.downup_separation(ds, casts, tbins, pmin=1.0)
+    assert out.sep.sizes["pair"] == 1
+    assert float(out.sep.isel(pair=0)) == pytest.approx(0.0, abs=1e-9)
+    assert out.attrs["mean"] == pytest.approx(0.0, abs=1e-9)
+
+
+def test_rosette_rms_scales_with_offset():
+    # fctd SP = ctd SP + 0.01 on the same depth grid -> rms == 0.01
+    depth = np.arange(50.0, 600.0, 1.0)
+    s1 = 34.0 + 0.001 * depth  # smooth reference salinity profile
+    ctd = xr.Dataset(
+        data_vars=dict(s1=("depth", s1)),
+        coords=dict(depth=("depth", depth)),
+    )
+    fctd = xr.Dataset(
+        data_vars=dict(SP=("time", s1 + 0.01), depth=("time", depth)),
+        coords=dict(time=("time", np.arange(depth.size))),
+    )
+    rms = tc.rosette_rms(fctd, ctd, 50, 600)
+    assert rms == pytest.approx(0.01, abs=1e-9)
