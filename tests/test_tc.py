@@ -317,9 +317,72 @@ def test_salinity_roughness_zero_for_smooth_profile():
     assert tc.salinity_roughness(ds, 50, 600) == pytest.approx(0.0, abs=1e-9)
 
 
+def test_salinity_roughness_cast_boundary_and_edge_spikes_ignored_interior_counted():
+    # Two labeled casts (cast id 0 outside, as label_casts produces), each
+    # long enough that edge=2.0 s (32 samples at 16 Hz) trims a real chunk
+    # off both ends. SP is a smooth ramp within each cast so the baseline
+    # roughness is ~0; single-sample spikes are then injected at three
+    # positions to check what the edge exclusion and per-cast segmentation
+    # do and do not catch.
+    fs = 16.0
+    n_cast = 200
+    gap = 20
+    n = 2 * n_cast + gap
+    time = np.datetime64("2024-01-01") + (np.arange(n) / fs * 1e9).astype(
+        "timedelta64[ns]"
+    )
+    p = np.linspace(50.0, 300.0, n)
+    cast = np.zeros(n, dtype=int)
+    cast[:n_cast] = 1
+    cast[n_cast + gap : n_cast + gap + n_cast] = 2
+    sp_base = np.concatenate(
+        [
+            np.linspace(34.0, 34.5, n_cast),
+            np.full(gap, np.nan),
+            np.linspace(34.5, 35.0, n_cast),
+        ]
+    )
+
+    def make_ds(sp):
+        return xr.Dataset(
+            coords=dict(time=("time", time), cast=("time", cast)),
+            data_vars=dict(SP=("time", sp), p=("time", p)),
+        )
+
+    edge = 2.0
+    nedge = int(round(edge * fs))  # 32
+    assert nedge < n_cast // 2  # sanity: edge trim leaves an interior
+
+    baseline = tc.salinity_roughness(make_ds(sp_base.copy()), 0, 1000, edge=edge)
+    assert baseline == pytest.approx(0.0, abs=1e-6)
+
+    # Spike at the last sample of cast 1: sits exactly at the cast boundary
+    # and inside cast 1's own trailing edge window (local index n_cast - 1,
+    # trimmed since the core is seg[nedge : n_cast - nedge]).
+    sp_boundary = sp_base.copy()
+    sp_boundary[n_cast - 1] += 5.0
+    boundary_roughness = tc.salinity_roughness(make_ds(sp_boundary), 0, 1000, edge=edge)
+    assert boundary_roughness == pytest.approx(0.0, abs=1e-6)
+
+    # Spike well inside cast 2's own edge window (5 samples past its start,
+    # nedge=32 samples are trimmed there), not at a cast boundary.
+    sp_edge = sp_base.copy()
+    sp_edge[n_cast + gap + 5] += 5.0
+    edge_roughness = tc.salinity_roughness(make_ds(sp_edge), 0, 1000, edge=edge)
+    assert edge_roughness == pytest.approx(0.0, abs=1e-6)
+
+    # Spike in the interior of cast 2 (100 samples in, well past nedge=32
+    # from either end of the 200-sample cast): must be counted.
+    sp_interior = sp_base.copy()
+    sp_interior[n_cast + gap + 100] += 5.0
+    interior_roughness = tc.salinity_roughness(make_ds(sp_interior), 0, 1000, edge=edge)
+    assert interior_roughness > 0.1
+
+
 def test_lag_tau_cost_map_minimum_at_true_pair():
     # Review check 2026-09-02 on this record: minimum at lag 0.08, tau 0.07
-    # on a 0.01 s grid with the record ends excluded; 48 pairs run in 0.1 s.
+    # on a 0.01 s grid with the record ends excluded; the 16x12=192-pair
+    # grid below runs in about 2.3 s.
     tau, lag = 0.06, 0.08
     ds = make_synthetic_ctd(tau=tau, lag=lag)
     lags = np.arange(0.0, 0.16, 0.01)
@@ -386,3 +449,62 @@ def test_rosette_rms_scales_with_offset():
     )
     rms = tc.rosette_rms(fctd, ctd, 50, 600)
     assert rms == pytest.approx(0.01, abs=1e-9)
+
+
+def test_rosette_rms_bins_multiple_fctd_samples_per_ctd_depth():
+    # fctd sampled at 16 Hz-equivalent depth spacing (16 samples per metre)
+    # against a 1 m ctd grid, several fctd samples land in every ctd bin.
+    # A one-period-per-metre oscillation is added on top of the offset: 16
+    # equally spaced samples spanning exactly one period sum to ~0
+    # regardless of phase, so the bin *mean* recovers the offset exactly
+    # while any single sample (e.g. a first-sample-per-bin bug) would not.
+    # This isolates the bin-averaging path itself (unlike
+    # test_rosette_rms_scales_with_offset, whose constant per-bin SP cannot
+    # distinguish averaging from picking one sample).
+    depth_grid = np.arange(50.0, 150.0, 1.0)
+    s1 = np.full(depth_grid.size, 34.0)
+    ctd = xr.Dataset(
+        data_vars=dict(s1=("depth", s1)),
+        coords=dict(depth=("depth", depth_grid)),
+    )
+
+    offset = 0.02
+    fine_depth = np.arange(49.5, 150.5, 1 / 16)
+    oscillation = 0.3 * np.cos(2 * np.pi * fine_depth)
+    fine_sp = 34.0 + offset + oscillation
+    fctd = xr.Dataset(
+        data_vars=dict(SP=("time", fine_sp), depth=("time", fine_depth)),
+        coords=dict(time=("time", np.arange(fine_depth.size))),
+    )
+
+    rms = tc.rosette_rms(fctd, ctd, 49.0, 151.0)
+    assert rms == pytest.approx(offset, abs=1e-6)
+
+
+def test_thermal_mass_cost_map_dims_and_beta_is_inverse_tau():
+    ds = make_synthetic_ctd(minutes=1).isel(time=slice(0, 512))
+    c_ref = ds.c.data.copy()
+
+    def max_abs_c_shift(ds_corr):
+        return float(np.nanmax(np.abs(ds_corr.c.data - c_ref)))
+
+    alphas = np.array([0.02, 0.05])
+    taus = np.array([5.0, 10.0])
+    cm = tc.thermal_mass_cost_map(ds, alphas, taus, max_abs_c_shift)
+
+    assert cm.cost.dims == ("alpha", "tau")
+    assert cm.cost.shape == (alphas.size, taus.size)
+    assert np.isfinite(cm.cost.data).all()
+
+    # beta = 1/tau, not tau itself: the map's grid evaluation at one pair
+    # must match a manual call with that inversion applied. If the map used
+    # beta=tau instead, this would fail (taus[0]=5.0 != 1/taus[0]=0.2).
+    ref = tc.thermal_mass_correction(ds, alpha=alphas[1], beta=1 / taus[0])
+    expected = max_abs_c_shift(ref)
+    assert float(cm.cost.sel(alpha=alphas[1], tau=taus[0])) == pytest.approx(expected)
+
+    # cost varies with alpha at fixed tau, and with tau at fixed alpha
+    fixed_tau = cm.cost.sel(tau=taus[0]).data
+    assert fixed_tau[0] != pytest.approx(fixed_tau[1])
+    fixed_alpha = cm.cost.sel(alpha=alphas[0]).data
+    assert fixed_alpha[0] != pytest.approx(fixed_alpha[1])
