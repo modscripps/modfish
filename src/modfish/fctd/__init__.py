@@ -12,6 +12,7 @@ from modfish.fctd.concat import concat_l0
 from modfish.fctd.config import CastParams, FCTDConfig, GridParams, TCParams
 from modfish.fctd.grid import grid_casts
 from modfish.fctd.l1 import make_l1
+from modfish.fctd.pipeline import process_deployment
 
 __all__ = [
     "CastParams",
@@ -24,4 +25,5 @@ __all__ = [
     "grid_casts",
     "label_casts",
     "make_l1",
+    "process_deployment",
 ]
