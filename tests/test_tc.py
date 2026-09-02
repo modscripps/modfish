@@ -482,26 +482,38 @@ def test_rosette_rms_bins_multiple_fctd_samples_per_ctd_depth():
 
 
 def test_thermal_mass_cost_map_dims_and_beta_is_inverse_tau():
+    # The objective reads ds_corr.SP, not ds_corr.c: this exercises the
+    # gsw.SP_from_C(...) / assign(SP=...) recompute inside the per-pair
+    # function, not just the thermal-mass correction on c that a
+    # c-only objective would already cover.
     ds = make_synthetic_ctd(minutes=1).isel(time=slice(0, 512))
-    c_ref = ds.c.data.copy()
+    uncorrected_sp = gsw.SP_from_C(10 * ds.c.data, ds.t.data, ds.p.data)
+    uncorrected_mean = float(np.nanmean(uncorrected_sp))
 
-    def max_abs_c_shift(ds_corr):
-        return float(np.nanmax(np.abs(ds_corr.c.data - c_ref)))
+    def mean_sp(ds_corr):
+        return float(np.nanmean(ds_corr.SP.data))
 
     alphas = np.array([0.02, 0.05])
     taus = np.array([5.0, 10.0])
-    cm = tc.thermal_mass_cost_map(ds, alphas, taus, max_abs_c_shift)
+    cm = tc.thermal_mass_cost_map(ds, alphas, taus, mean_sp)
 
     assert cm.cost.dims == ("alpha", "tau")
     assert cm.cost.shape == (alphas.size, taus.size)
     assert np.isfinite(cm.cost.data).all()
 
     # beta = 1/tau, not tau itself: the map's grid evaluation at one pair
-    # must match a manual call with that inversion applied. If the map used
-    # beta=tau instead, this would fail (taus[0]=5.0 != 1/taus[0]=0.2).
+    # must match a manual call with that inversion applied, computing SP
+    # from the manually corrected c/t/p the same way the map itself does.
+    # If the map used beta=tau instead, this would fail
+    # (taus[0]=5.0 != 1/taus[0]=0.2); if it forgot to recompute SP and
+    # left the objective reading stale, uncorrected SP, `actual` below
+    # would equal `uncorrected_mean` instead of `expected`.
     ref = tc.thermal_mass_correction(ds, alpha=alphas[1], beta=1 / taus[0])
-    expected = max_abs_c_shift(ref)
-    assert float(cm.cost.sel(alpha=alphas[1], tau=taus[0])) == pytest.approx(expected)
+    ref_sp = gsw.SP_from_C(10 * ref.c.data, ref.t.data, ref.p.data)
+    expected = float(np.nanmean(ref_sp))
+    actual = float(cm.cost.sel(alpha=alphas[1], tau=taus[0]))
+    assert actual == pytest.approx(expected)
+    assert abs(actual - uncorrected_mean) > 1e-4
 
     # cost varies with alpha at fixed tau, and with tau at fixed alpha
     fixed_tau = cm.cost.sel(tau=taus[0]).data
