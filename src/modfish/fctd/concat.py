@@ -23,17 +23,40 @@ _OVERLAP_WARN_S = 5.0
 _GAP_WARN_S = 60.0
 
 
-def _file_time_range(tree: xr.DataTree):
-    """Overall (min, max) time span covered by a file's groups.
+def _load_groups(path: Path) -> dict:
+    """Open one file's L0 DataTree, load its groups into memory, and close it.
 
-    Union across all groups present (not the root, which has no `time`
-    coordinate), so the check does not depend on which stream happens to be
-    present in every file.
+    Loading eagerly and closing immediately keeps at most one file handle
+    open at a time; a deployment can span hundreds of files, and holding
+    every `xr.open_datatree` handle open until the whole concatenation
+    finishes risks exhausting file descriptors.
 
     Parameters
     ----------
-    tree : xr.DataTree
-        One file's L0 tree, as returned by `xr.open_datatree`.
+    path : Path
+        Per-file L0 netCDF path.
+
+    Returns
+    -------
+    dict of str -> xr.Dataset
+        In-memory group datasets, keyed by group name. The root (block
+        forensics, dim `block`) is excluded: it is never a child of itself
+        in `tree.children`.
+    """
+    with xr.open_datatree(path) as tree:
+        return {name: node.ds.load() for name, node in tree.children.items()}
+
+
+def _time_range(groups: dict):
+    """Overall (min, max) time span covered by a file's groups.
+
+    Union across all groups present, so the check does not depend on which
+    stream happens to be present in every file.
+
+    Parameters
+    ----------
+    groups : dict of str -> xr.Dataset
+        One file's group datasets, as returned by `_load_groups`.
 
     Returns
     -------
@@ -41,9 +64,9 @@ def _file_time_range(tree: xr.DataTree):
         `(tmin, tmax)`, or None if no group has any `time` samples.
     """
     times = [
-        node.ds["time"].values
-        for name, node in tree.children.items()
-        if "time" in node.ds.coords and node.ds.sizes.get("time", 0)
+        ds["time"].values
+        for ds in groups.values()
+        if "time" in ds.coords and ds.sizes.get("time", 0)
     ]
     if not times:
         return None
@@ -71,12 +94,17 @@ def concat_l0(files: list, keep_counts: bool = False) -> xr.DataTree:
         One group per stream present in any input file (union of groups),
         each concatenated over `time`, sorted, and deduplicated on
         timestamp (first occurrence kept). The L0 root data (per-block
-        clock forensics) is not carried into the result.
+        clock forensics) is not carried into the result. Variable-level
+        attrs (`units`, `long_name`, ...) and each group's own dataset
+        attrs (e.g. the SBE49 calibration coefficients `modraw.read()`
+        stamps onto `ctd`) are taken from whichever file's group sorts
+        first among the parts handed to `xr.concat` for that group.
 
         Root attrs: `files` (input basenames, in the order given), `n_files`.
         Each group dataset's own attrs carry `n_bad_length`, summed across
         the files that contributed to it, where at least one of them
-        carried that attr.
+        carried that attr (this overwrites whichever single file's count
+        `xr.concat` otherwise would have carried through).
 
     Raises
     ------
@@ -89,20 +117,24 @@ def concat_l0(files: list, keep_counts: bool = False) -> xr.DataTree:
     overlap by more than 5 s or gap by more than 60 s, based on the union of
     each file's group time spans (not `ctd` alone, so a file missing `ctd`
     still participates in the check).
+
+    Each input file is opened, loaded into memory, and closed one at a time
+    (see `_load_groups`), so at most one netCDF file handle is open at a
+    time regardless of how many files are given.
     """
     files = [Path(f) for f in files]
     if not files:
         raise ValueError("concat_l0: no files given")
 
-    trees = [xr.open_datatree(f) for f in files]
+    per_file_groups = [_load_groups(f) for f in files]
 
     group_names = []
-    for tree in trees:
-        for name in tree.children:
+    for groups in per_file_groups:
+        for name in groups:
             if name not in group_names:
                 group_names.append(name)
 
-    ranges = [_file_time_range(tree) for tree in trees]
+    ranges = [_time_range(groups) for groups in per_file_groups]
     for i in range(len(ranges) - 1):
         r0, r1 = ranges[i], ranges[i + 1]
         if r0 is None or r1 is None:
@@ -125,11 +157,11 @@ def concat_l0(files: list, keep_counts: bool = False) -> xr.DataTree:
 
     result_groups = {}
     for name in group_names:
-        parts = [tree[name].ds for tree in trees if name in tree.children]
+        parts = [groups[name] for groups in per_file_groups if name in groups]
         if not parts:
             continue
 
-        ds = xr.concat(parts, dim="time", combine_attrs="drop")
+        ds = xr.concat(parts, dim="time", combine_attrs="override")
         ds = ds.sortby("time")
         dup = pd.Index(ds["time"].values).duplicated()
         if dup.any():

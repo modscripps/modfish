@@ -18,6 +18,12 @@ import xarray as xr
 #: EFE channel names, matching `modfish.modraw.efe.decode_efe4`'s output.
 _EFE_CHANNELS = ("t1", "t2", "f1", "c1", "a1", "a2", "a3")
 
+#: Stand-in for one of the SBE49 calibration coefficients `modraw.read()`
+#: stamps onto `ctd.attrs` (real key `ta0`, from `sbe49_cal`). Not a real
+#: coefficient; exported so tests can pin that `concat_l0` carries it
+#: through instead of recomputing a value that has to match production.
+FAKE_CAL_TA0 = 1.23456e-3
+
 
 def two_cast_p(seconds):
     """Two-cast sawtooth pressure profile.
@@ -113,7 +119,13 @@ def make_l0_tree(
             "pt_raw": ("time", rng.integers(0, 2**16, n).astype(float)),
         },
     )
+    ctd.p.attrs = dict(long_name="pressure", units="dbar")
+    ctd.t.attrs = dict(long_name="temperature", units="°C")
+    ctd.c.attrs = dict(long_name="conductivity", units="S/m")
+    for _name in ("t_raw", "c_raw", "p_raw", "pt_raw"):
+        ctd[_name].attrs = dict(long_name=f"{_name} counts", units="counts")
     ctd.attrs["n_bad_length"] = 0
+    ctd.attrs["ta0"] = FAKE_CAL_TA0
 
     groups = {"ctd": ctd}
 
@@ -128,6 +140,8 @@ def make_l0_tree(
                 ch: ("time", rng.normal(0, 1.0, n_efe)) for ch in _EFE_CHANNELS
             },
         )
+        for ch in _EFE_CHANNELS:
+            efe[ch].attrs = dict(long_name=f"EFE channel {ch}", units="V")
         efe.attrs["n_bad_length"] = 0
         groups["efe"] = efe
 
@@ -144,6 +158,8 @@ def make_l0_tree(
                 "lon": ("time", -140.0 + drift_per_s * seconds_gps),
             },
         )
+        gps.lat.attrs = dict(long_name="latitude", units="degrees_north")
+        gps.lon.attrs = dict(long_name="longitude", units="degrees_east")
         groups["gps"] = gps
 
     root = xr.Dataset(
