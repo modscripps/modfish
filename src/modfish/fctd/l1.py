@@ -13,6 +13,7 @@ Whether `t`/`c` should be renamed to something more descriptive is an open
 question for the T-C correction analysis (FCTD reprocessing sub-project 3).
 """
 
+import dataclasses
 import logging
 
 import gsw
@@ -25,14 +26,6 @@ from modfish.fctd.casts import _sampling_rate, casts_to_dataset, find_casts, lab
 from modfish.fctd.config import FCTDConfig
 
 logger = logging.getLogger(__name__)
-
-#: Prandtl number and empirical scale factor passed to
-#: `tc.viscous_heating_temperature_correction`, matching that function's
-#: own defaults (`scale=2.0` is the undocumented empirical factor its
-#: docstring flags as provenance-less; recorded here so `_apply_tc` can
-#: stamp the actual values used into `attrs["corrections"]`).
-_VISCOUS_PR = 15.0
-_VISCOUS_SCALE = 2.0
 
 #: Human-readable note stamped onto `ctd.attrs` when position falls back
 #: to a fixed latitude: `lon` is NaN in that case, which propagates into
@@ -202,46 +195,29 @@ def _add_dpdt(ctd: xr.Dataset, config: FCTDConfig) -> xr.Dataset:
 
 
 def _apply_tc(ctd: xr.Dataset, config: FCTDConfig) -> xr.Dataset:
-    """Apply the configured T-C sensor response corrections, in order.
+    """Apply the configured T-C sensor response correction chain.
 
-    Stashes `t_raw`/`c_raw` before any correction. Phase matching
-    (`config.tc.phase_match`) runs `tc.phase_correct`, whose output lands
-    on a trimmed time axis (segmenting loses the edges) that is otherwise
-    NaN-free. Thermal-mass (`config.tc.thermal_mass`) and viscous-heating
-    (`config.tc.viscous_heating`) corrections, when also enabled, run on
-    that same trimmed, NaN-free working dataset rather than on a
-    pre-reindexed one: `thermal_mass_correction`'s recursive filter
-    propagates the first NaN it sees through every later sample
-    (`tc.py:632-633`), so feeding it the trimmed axis's NaN-padded
-    reindexed form would silently turn the whole `c` record NaN. The
-    working dataset is reindexed back onto the full ctd time axis once, at
-    the end, only if phase matching ran (with `thermal_mass`/
-    `viscous_heating` alone, the input is already the full, finite axis
-    and no reindex is needed). `t`/`c` attrs, which xarray arithmetic and
-    `reindex` are not reliably guaranteed to carry through every step, are
-    saved before any correction and reattached at the end.
+    Stashes `t_raw`/`c_raw` before any correction, then hands `ctd` to
+    `tc.correct` with `config.tc`'s fields as keyword arguments. `t`/`c`
+    attrs (units, long_name, ...) are taken from the pre-correction
+    variables, since `tc.correct` does not carry them, and the
+    `processing` attr it does stamp onto each is merged back on top.
 
     Parameters
     ----------
     ctd : xr.Dataset
-        Must have `t`, `c`, `p`, `lon`, `lat`, `dPdt` on `time`.
+        Must have `t`, `c`, `p`, `dPdt` on `time`.
     config : FCTDConfig
         Uses `tc` (a `TCParams`).
 
     Returns
     -------
     xr.Dataset
-        `ctd` with `t_raw`, `c_raw` added, `t`/`c` corrected per config
-        (attrs preserved from the pre-correction `t`/`c`), and
-        `attrs["corrections"]` set to a human-readable summary of the
-        steps applied, each with its parameters (or "none").
-        `attrs["tau1"]`/`attrs["L1"]` are set when phase matching runs.
-        `attrs["tcfit"]` is also set then, to the tcfit range actually
-        used by the fit: `config.tc.tcfit` when given, otherwise the
-        range `tc.add_tcfit_default` resolved (never the unresolved
-        `None`), read back from `phase_correct`'s own output attrs. The
-        same resolved value is recorded in the `phase_correct(...)` entry
-        of `attrs["corrections"]`.
+        `ctd` with `t_raw`, `c_raw` added, `t`/`c` corrected per config on
+        the same `time` axis (no reindex), `t.attrs["processing"]` and
+        `c.attrs["processing"]` set to the steps that touched each
+        variable (or "none"), and `attrs["corrections"]` set to a
+        function-call-style summary of the whole chain (or "none").
     """
     ctd = ctd.assign(t_raw=ctd["t"].copy(deep=True), c_raw=ctd["c"].copy(deep=True))
     ctd["t_raw"].attrs = dict(ctd["t"].attrs)
@@ -250,51 +226,14 @@ def _apply_tc(ctd: xr.Dataset, config: FCTDConfig) -> xr.Dataset:
     t_attrs = dict(ctd["t"].attrs)
     c_attrs = dict(ctd["c"].attrs)
 
-    tc_cfg = config.tc
-    corrections = []
-    original_time = ctd["time"]
+    corrected = tc.correct(ctd, **dataclasses.asdict(config.tc))
 
-    if tc_cfg.phase_match:
-        work = tc.phase_correct(ctd, N=tc_cfg.N, f0=tc_cfg.f0, tcfit=tc_cfg.tcfit)
-        ctd.attrs["tau1"] = float(work.attrs["tau1"])
-        ctd.attrs["L1"] = float(work.attrs["L1"])
-        # tc_cfg.tcfit is None when the default kicked in; phase_correct
-        # resolves the actual range used (add_tcfit_default's pick) into
-        # work.attrs["tcfit"], so take that back rather than recording the
-        # unresolved None.
-        resolved_tcfit = work.attrs.get("tcfit", tc_cfg.tcfit)
-        ctd.attrs["tcfit"] = resolved_tcfit
-        corrections.append(
-            f"phase_correct(N={tc_cfg.N}, f0={tc_cfg.f0}, tcfit={resolved_tcfit})"
-        )
-    else:
-        work = ctd
+    ctd["t"] = corrected["t"]
+    ctd["c"] = corrected["c"]
+    ctd["t"].attrs = {**t_attrs, "processing": corrected["t"].attrs["processing"]}
+    ctd["c"].attrs = {**c_attrs, "processing": corrected["c"].attrs["processing"]}
 
-    if tc_cfg.thermal_mass:
-        work = tc.thermal_mass_correction(work, alpha=tc_cfg.alpha, beta=tc_cfg.beta)
-        corrections.append(
-            f"thermal_mass_correction(alpha={tc_cfg.alpha}, beta={tc_cfg.beta})"
-        )
-
-    if tc_cfg.viscous_heating:
-        dT = tc.viscous_heating_temperature_correction(
-            work["dPdt"].values, Pr=_VISCOUS_PR, scale=_VISCOUS_SCALE
-        )
-        work = work.assign(t=work["t"] - dT)
-        corrections.append(
-            f"viscous_heating_temperature_correction(Pr={_VISCOUS_PR}, "
-            f"scale={_VISCOUS_SCALE})"
-        )
-
-    if tc_cfg.phase_match:
-        work = work.reindex(time=original_time)
-
-    ctd["t"] = work["t"]
-    ctd["c"] = work["c"]
-    ctd["t"].attrs = t_attrs
-    ctd["c"].attrs = c_attrs
-
-    ctd.attrs["corrections"] = "; ".join(corrections) if corrections else "none"
+    ctd.attrs["corrections"] = corrected.attrs["corrections"]
     return ctd
 
 
@@ -380,19 +319,10 @@ def make_l1(tree: xr.DataTree, config: FCTDConfig | None = None) -> xr.DataTree:
     the same explanation onto `ctd.attrs["latitude_source_note"]` for
     anyone inspecting the product without having read this docstring.
 
-    When phase matching is enabled, `config.tc.tcfit`'s pressure range
-    selects the fit's contiguous index span rather than a per-sample mask
-    (see `TCParams.tcfit`); on a deployment record with multiple casts,
-    the fit effectively sees the whole record, surface soaks included, not
-    just the casts that pass through the pressure range. Per-cast or
-    masked-segment fitting is a FCTD reprocessing sub-project 3 item.
-
-    Phase matching also low-pass filters `t` and `c` (and, inside
-    `tc.phase_correct`, `p`), but `_apply_tc` only takes the corrected
-    `t`/`c` back from that step; `p` keeps its original measured (i.e.
-    unfiltered) values. Derived salinity (`SP`, `SA`, and downstream `CT`,
-    `sgth0`) is therefore computed from filtered `t`/`c` together with
-    unfiltered `p`.
+    `t` and `c` each carry a `processing` attr listing the T-C correction
+    steps applied (or "none"); see `_apply_tc` and `tc.correct`. The
+    default `FCTDConfig()` applies no correction: `t`/`c` come out equal
+    to `t_raw`/`c_raw`.
     """
     if config is None:
         config = FCTDConfig()

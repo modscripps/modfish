@@ -21,6 +21,16 @@
     had extended `ctdproc`'s dual-sensor implementation to the
     single-sensor FCTD, carrying ctdproc's NumPy 2 reshape fix
     (ctdproc commit 5e75198).
+-   Added `tc.correct` to `modfish.tc`: a time-domain T-C correction
+    chain (zero-phase low-pass, sensor response `lag`/`tau_t`, thermal
+    mass, viscous heating, each independently skippable) that preserves
+    the input time axis and stamps `processing` and `corrections` attrs
+    naming the steps applied. `FCTDConfig.tc`/`make_l1` now drive this
+    chain in place of the frequency-domain phase-matching path.
+-   Added T-C parameter estimators to `modfish.tc`: `find_lags`,
+    `lag_tau_cost_map`, `salinity_roughness`, `downup_separation`,
+    `rosette_rms`, and `thermal_mass_cost_map`, for fitting `lag`,
+    `tau_t`, `alpha`, and `beta` against a deployment record.
 
 ### Documentation
 -   Documented the `modfish.modraw` subpackage in its module docstring
@@ -36,6 +46,12 @@
     phase-matching low-pass cutoff `f0` (6 Hz in `gvpy`, 9 in the orphaned
     `modfish.utils` copy), the thermal-mass `alpha`/`beta` pair, and
     whether `t`/`c` should be renamed.
+-   Documented `TCParams` and `tc.correct` for the time-domain chain:
+    field-by-field provenance comments on `TCParams` (`lag`, `tau_t`,
+    `lowpass`, `alpha`, `beta`, `pr`), and the correction order, gap-fill
+    behavior, and no-op defaults on `tc.correct`. `make_l1`'s docstring
+    now states that `t`/`c` carry a `processing` attr and that the
+    default `FCTDConfig()` applies no correction.
 
 ### Internal Changes
 -   Added cross-validation fixtures and tests against the Matlab and rust
@@ -54,6 +70,16 @@
     cross-validation tests run about 36 minutes with the server mount
     present (`fctd_validation_notes.md`), so they are opt-in via
     `uv run pytest -m slow`.
+-   Reshaped `TCParams` around `tc.correct`'s time-domain chain: `lag`,
+    `tau_t`, `lowpass`, and `pr` replace `phase_match`, `N`, `f0`, and
+    `tcfit`. Every field now defaults to a no-op, so `FCTDConfig()`
+    leaves `t`/`c` equal to `t_raw`/`c_raw`. `FCTDConfig.from_dict`
+    raises `ValueError` naming the removed key and its replacement when
+    a stale cruise config sets any of the four under `tc`.
+-   Rewrote `_apply_tc` in `modfish.fctd.l1` as a thin wrapper around
+    `tc.correct(ctd, **dataclasses.asdict(config.tc))`. The reindex back
+    onto the full time axis is gone, since `tc.correct` never leaves it.
+    `tau1`, `L1`, and `tcfit` are no longer stamped onto `ctd.attrs`.
 
 <!-- ## unreleased -->
 <!-- ### Breaking changes -->
