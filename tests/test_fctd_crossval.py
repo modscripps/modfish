@@ -47,14 +47,18 @@ at the repo root. The ones that shape the assertions here:
   correction, so the 2024 Matlab profiles are the smoother of the two and
   the 2024 residuals are set by that.
 - 17 of the 256 raw files were never converted by the 2024 cruise chain (239
-  `EPSI*.mat` files in `fctd_mat/`), 16 of them inside 02:08-03:22 on
-  2024-11-21, so 13 full-depth python casts have no Matlab counterpart.
+  `EPSI*.mat` files in `fctd_mat/`), 16 of them between 02:08:04 and
+  03:18:35 on 2024-11-21, so 12 full-depth python casts have no Matlab
+  counterpart.
 - The 2025 `salinity_despike` is PSS-78 evaluated with the ITS-90
   temperature passed straight through as if it were IPTS-68. MOD_fish_lib
   bundles its own `FastCTD_MATLAB/seawater/sw_sals.m` with `del_T = T - 15`,
   and that copy was first on the 2025 path. The 2024 run used a seawater 3.3
-  copy that does convert. The 2025 Matlab salinity is therefore low by
-  0.0016, which `test_crossval_d07_salinity_grid` measures both ways.
+  copy that does convert. Skipping the conversion leaves the assumed IPTS-68
+  temperature below the correct one, and PSS-78 returns a higher salinity
+  for a lower temperature at fixed conductivity ratio, so the 2025 Matlab
+  salinity is high by 0.0016, which `test_crossval_d07_salinity_grid`
+  measures both ways.
 """
 
 import pathlib
@@ -67,7 +71,7 @@ import xarray as xr
 
 import modfish
 from modfish.fctd import concat_l0, grid_casts, make_l1, process_deployment
-from modfish.fctd.config import FCTDConfig, TCParams
+from modfish.fctd.config import FCTDConfig, GridParams, TCParams
 
 DEPLOY = pathlib.Path(
     "/mnt/mod-server/MOTIVE/Cruises/skq202417s/05_processed_data/24_1120_d11_fctd_to_mooringA"
@@ -91,7 +95,8 @@ RAW_2025 = pathlib.Path(
 pytestmark = pytest.mark.slow
 needs_data = pytest.mark.skipif(not MATLAB_GRID.exists(), reason="mod server not mounted")
 needs_data_2025 = pytest.mark.skipif(
-    not MATLAB_GRID_2025.exists(), reason="mod server not mounted"
+    not (MATLAB_GRID_2025.exists() and RAW_2025.is_dir()),
+    reason="mod server not mounted (needs both the 2025 grid and Raw_full_cruise)",
 )
 
 #: Latitude the 2024 Matlab gridder hardcodes into its depth conversion
@@ -150,6 +155,7 @@ def crossval(tmp_path_factory):
 
     cfg = FCTDConfig(
         tc=TCParams(phase_match=False, thermal_mass=False),
+        grid=GridParams(dz=0.5),
         latitude_fallback=30.0,
     )
     _, grid_path = process_deployment(l0, tmp_path / "out", "d11", cfg)
@@ -200,7 +206,7 @@ def crossval2025(tmp_path_factory):
     same quantity recomputed from the Matlab binned c/t/p with the ITS-90
     conversion PSS-78 requires.
     """
-    if not MATLAB_GRID_2025.exists():
+    if not (MATLAB_GRID_2025.exists() and RAW_2025.is_dir()):
         pytest.skip("mod server not mounted")
 
     stems = sorted(p.stem for p in DEPLOY_2025.glob("fctd_mat/FCTD25_*.mat"))
@@ -208,6 +214,9 @@ def crossval2025(tmp_path_factory):
     raw = [RAW_2025 / f"{s}.modraw" for s in stems]
     n_missing = sum(not p.exists() for p in raw)
     raw = [p for p in raw if p.exists()]
+    # A partially populated mount would otherwise reach the len(l0) ==
+    # len(raw) check below as 0 == 0 and quietly compare an empty product.
+    assert len(raw) > 600, f"only {len(raw)} of {len(stems)} stems found in {RAW_2025}"
 
     tmp_path = tmp_path_factory.mktemp("fctd_crossval_2025")
     modfish.modraw.convert(raw, tmp_path / "l0", parallel=True)
@@ -216,6 +225,7 @@ def crossval2025(tmp_path_factory):
 
     cfg = FCTDConfig(
         tc=TCParams(phase_match=False, thermal_mass=False),
+        grid=GridParams(dz=0.5),
         latitude_fallback=30.0,
     )
     ours = grid_casts(make_l1(concat_l0(l0, keep_counts=cfg.keep_counts), cfg), cfg.grid)
@@ -290,9 +300,10 @@ def _roughness_ratio(ours, theirs, pairs, oname, tname):
 @needs_data
 def test_crossval_d11_casts_match(crossval):
     ours, theirs, pairs = crossval
-    # 186 of 187 Matlab columns pair up; 15 of our 201 casts have no
-    # counterpart (13 in the window the cruise chain never converted, plus
-    # three shallow bounces its cast detector rejected).
+    # 186 of 187 Matlab columns pair up. 15 of our 201 casts have no
+    # counterpart: 12 in the 02:08:04 to 03:18:35 window whose raw files the
+    # cruise chain never converted, plus three shallow bounces its cast
+    # detector rejected.
     assert len(pairs) > 0.8 * ours.sizes["cast"]
     assert len(pairs) > 0.95 * theirs.sizes["time"]
     # Observed 2026-09-01: 201 python casts against 187 Matlab columns. The
@@ -343,6 +354,19 @@ def test_crossval_d11_salinity_grid(crossval):
     # applies to conductivity, which removes salinity spiking that the
     # comparison run keeps.
     assert np.nanmedian(diffs) < 0.005
+
+    # The 2024 product does not carry the temperature-scale bug the 2025 one
+    # does. `salinity` reproduces from its own binned c/t/p as PSS-78 with
+    # the ITS-90 conversion gsw applies, so a seawater 3.3 copy was first on
+    # the 2024 MATLAB path. Measured 2026-09-01: max 1.4e-14 over 350,116
+    # finite points, 350,112 of them bit-identical. The mirror of this
+    # assertion in `test_crossval_d07_salinity_grid` fails without the
+    # `/ T68_FACTOR`, which is what makes the two runs' opposite behavior a
+    # tested fact instead of a note.
+    recomputed = gsw.SP_from_C(theirs.c.data * 10.0, theirs.t.data, theirs.p.data)
+    good = np.isfinite(recomputed) & np.isfinite(theirs.s.data)
+    assert good.sum() > 100_000
+    assert np.nanmax(np.abs(recomputed[good] - theirs.s.data[good])) < 1e-12
 
 
 @needs_data

@@ -235,11 +235,19 @@ SBE49 reports ITS-90, so the 1.00024 conversion is required. `MOD_fish_lib` bund
 documenting T as IPTS-68, present since the repo's initial commit, and that copy was first
 on the 2025 MATLAB path.
 
+Skipping the conversion leaves the assumed IPTS-68 temperature below the correct one, and
+PSS-78 returns a higher salinity for a lower temperature at fixed conductivity ratio, so
+the Matlab salinity is **high**. `salinity_despike` minus a correctly computed PSS-78 is
+positive at all 1,282,179 finite points: median +0.00159, p1 +0.00089, p99 +0.00473,
+minimum +0.00083. The error grows with temperature, from +0.00115 (mean, 3 to 6 degC) to
++0.00266 (10 to 14 degC) to +0.00458 (22 to 27 degC).
+
 The 2024 product does not have the bug. Its `salinity` reproduces to 1.4e-14 as
 `gsw.SP_from_C(c*10, t, p)`, so a seawater 3.3 copy with `del_T68 = T * 1.00024 - 15` took
-precedence on that run. The two cruises' products are on different temperature scales for
-salinity. The offset is 0.00160 at the 2025 deployment's temperatures and 0.00189 at the
-2024 deployment's.
+precedence on that run. `test_crossval_d11_salinity_grid` asserts that reproduction, so the
+two products' opposite behavior is pinned on both sides. The two cruises' products are on
+different temperature scales for salinity. The median offset is 0.00160 at the 2025
+deployment's temperatures and would be 0.00189 at the 2024 deployment's.
 
 Recomputing `salinity_despike` from the Matlab binned c/t/p with the conversion brings
 agreement with our `SP` to 7.89e-6, the same floor as the temperature comparison, so the
@@ -255,7 +263,7 @@ one real one shows up in density. Numbers in this section are from the 2024 prod
   finite points, 350,112 of them bit-identical. The "TEOS-10 against EOS-80" framing does
   not apply to practical salinity. The agreement depends on which `sw_sals.m` is on the
   MATLAB path. See the 2025 section above, where a copy without the temperature-scale
-  conversion puts the Matlab salinity 0.0016 low.
+  conversion puts the Matlab salinity 0.0016 high.
 - **Per-sample against binned salinity is 1e-6.** Within our own product, `SP` computed per
   sample and then bin-averaged differs from `SP` recomputed from the binned c/t/p by 3.3e-9
   (median) and 2.8e-6 (p99). The design doc's preference for computing before binning
@@ -325,9 +333,11 @@ Peak resident memory during the d07 `concat_l0` was about 16 GB.
 
 - The 17 raw files the 2024 cruise chain never converted are worth reporting to whoever owns
   the 2024 products. The python pipeline reads all 256.
-- The 2025 Matlab salinity is 0.0016 low because `MOD_fish_lib`'s bundled `sw_sals.m` skips
-  the ITS-90 conversion. Anyone using `FCTDgrid.salinity` or `salinity_despike` from the
-  2025 cruise, or comparing 2024 against 2025 salinities, needs to know. Worth reporting
-  upstream.
+- The 2025 Matlab salinity is 0.0016 high because `MOD_fish_lib`'s bundled `sw_sals.m`
+  skips the ITS-90 conversion. Skipping it puts the assumed IPTS-68 temperature below the
+  correct one, and PSS-78 returns a higher salinity for a lower temperature at fixed
+  conductivity ratio, so the error is positive at every ocean temperature. Anyone using
+  `FCTDgrid.salinity` or `salinity_despike` from the 2025 cruise, or comparing 2024 against
+  2025 salinities, needs to know. Worth reporting upstream.
 - Whether the 2024 gridder's legacy gain and phase correction is the right target for our
   `phase_correct` parameters is sub-project 3.
