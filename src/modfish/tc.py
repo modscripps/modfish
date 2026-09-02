@@ -676,6 +676,24 @@ def response_correction(
     and `thermal_mass_correction` use, so a time gap in a concatenated
     record perturbs at most the samples adjacent to it, not the sampling
     rate.
+
+    The whole-record `rfft` treats the record as periodic, so a mismatch
+    between the first and last sample wraps into a discontinuity that the
+    fractional-delay kernel of `H` (a sinc) rings on, all the way through
+    the record. This was found on a real d09 cast whose record starts at
+    4.6 dbar and ends at 436 dbar (a 15.7 degC step between its last and
+    first sample): the salinity-roughness cost along a lag scan showed a
+    sawtooth with minima at exactly 0, 0.0625 and 0.125 s (whole samples
+    at 16 Hz) and a max/min ratio of 34, against a smooth single minimum
+    and max/min ratio of 3.4 on a stretch whose ends differ by only 0.04
+    degC. To avoid this, the straight line through the first and last
+    sample of the gap-filled record is subtracted before the FFT, so the
+    periodic extension is continuous; `H` is applied to the residual, and
+    the line is added back analytically rather than through the FFT. For
+    a line `a + b*t`, advancing by `lag` gives `a + b*(t + lag)`, and the
+    `(1 + i 2 pi f tau_t)` factor is a time-derivative operator, adding
+    `tau_t * b`; the restored line is therefore
+    `a + b*(t + lag) + tau_t*b`.
     """
     if lag < 0:
         raise ValueError(
@@ -694,9 +712,15 @@ def response_correction(
     x, mask = _fill_gaps(x_raw)
     n = x.size
 
+    t_idx = np.arange(n) * dt
+    a = x[0]
+    b = (x[-1] - x[0]) / t_idx[-1] if n > 1 else 0.0
+    resid = x - (a + b * t_idx)
+
     f = np.fft.rfftfreq(n, d=1 / fs)
     H = (1 + 1j * 2 * np.pi * f * tau_t) * np.exp(1j * 2 * np.pi * f * lag)
-    y = np.fft.irfft(np.fft.rfft(x) * H, n)
+    y = np.fft.irfft(np.fft.rfft(resid) * H, n)
+    y += a + b * (t_idx + lag) + tau_t * b
 
     if lag > 0:
         ntrail = int(np.ceil(lag * fs))

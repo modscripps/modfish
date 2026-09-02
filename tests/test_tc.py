@@ -239,6 +239,59 @@ def test_response_correction_restores_interior_nan_only():
     assert np.isfinite(out.t.data[210:-2]).all()
 
 
+def test_response_correction_linear_ramp_is_shifted_exactly():
+    # A linear ramp has no discontinuity to wrap-around ring on its own, so
+    # this isolates the endpoint-line bookkeeping (subtract before the FFT,
+    # add back analytically) from the ringing the next test targets: the
+    # output must equal the advanced/scaled line to near machine precision.
+    ds = make_synthetic_ctd().isel(time=slice(0, 512))
+    fs = 16.0
+    dt = 1 / fs
+    n = ds.sizes["time"]
+    t_idx = np.arange(n) * dt
+    a, b = 3.0, 0.7
+    ds["t"] = ("time", a + b * t_idx)
+
+    lag = 1.3 * dt  # "1.3 samples"
+    tau_t = 0.05
+    out = tc.response_correction(ds, lag=lag, tau_t=tau_t)
+
+    expected = a + b * (t_idx + lag) + tau_t * b
+    ntrail = int(np.ceil(lag * fs))
+    np.testing.assert_allclose(
+        out.t.data[:-ntrail], expected[:-ntrail], atol=1e-9
+    )
+
+
+def test_response_correction_step_between_ends_does_not_ring():
+    # trend is centered on 0 (-7.5..7.5), not 0..15: an off-center trend
+    # (tried first) shifts the record's mean temperature enough that SP's
+    # own nonlinear dependence on T changes the roughness by itself, even
+    # after the fix (measured post-fix ratio 0.799 there, outside the 10%
+    # tolerance below), confounding that nonlinearity with the wrap defect
+    # this test targets. Centering the trend on 0 avoids the confound.
+    #
+    # Measured 2026-09-02: before the fix, r_step=0.0080219, r_detrend=
+    # 0.0045184, ratio 1.775; after the fix, r_step=0.0044993, r_detrend=
+    # 0.0045112, ratio 0.997. 10 % tolerance (1.1) separates them.
+    def roughness(ds_in):
+        out = tc.correct(ds_in, lag=0.03, tau_t=0.03, lowpass=4.0)
+        SP = gsw.SP_from_C(10 * out.c.data, out.t.data, out.p.data)
+        out = out.assign(SP=("time", SP))
+        return tc.salinity_roughness(out, 50, 600)
+
+    ds = make_synthetic_ctd()
+    trend = np.linspace(-7.5, 7.5, ds.sizes["time"])
+
+    ds_step = ds.copy(deep=True)
+    ds_step["t"] = ds_step["t"] + trend
+
+    r_step = roughness(ds_step)
+    r_detrend = roughness(ds.copy(deep=True))
+
+    assert r_step == pytest.approx(r_detrend, rel=0.1)
+
+
 def test_correct_true_parameters_recover_clean_signal():
     # Review check 2026-09-02 measured 0.013 for the FFT application and
     # 0.089 for a central-difference time-domain version; 0.1 separates them.
@@ -385,6 +438,30 @@ def test_lag_tau_cost_map_minimum_at_true_pair():
     # grid below runs in about 2.3 s.
     tau, lag = 0.06, 0.08
     ds = make_synthetic_ctd(tau=tau, lag=lag)
+    lags = np.arange(0.0, 0.16, 0.01)
+    taus = np.arange(0.0, 0.12, 0.01)
+    cm = tc.lag_tau_cost_map(ds, lags, taus, lowpass=4.0, pmin=50, pmax=600)
+    i = cm.cost.argmin(dim=("lag", "tau_t"))
+    assert float(cm.lag[i["lag"]]) == pytest.approx(lag, abs=0.015)
+    assert float(cm.tau_t[i["tau_t"]]) == pytest.approx(tau, abs=0.015)
+
+
+def test_lag_tau_cost_map_minimum_at_true_pair_with_end_to_end_step():
+    # Same as test_lag_tau_cost_map_minimum_at_true_pair, but t carries a
+    # 15 degC trend (centered on 0, see the comment in
+    # test_response_correction_step_between_ends_does_not_ring for why) so
+    # the record's first and last samples differ sharply (the notebook 04
+    # defect: without the response_correction fix, the periodic FFT rings
+    # on that step and the cost map along a lag scan turns into a sawtooth
+    # with minima at whole 16 Hz samples, missing the true lag).
+    #
+    # Measured 2026-09-02 after the fix: minimum at lag 0.08, tau 0.07,
+    # same as the unstepped test's minimum (the trend does not move it).
+    tau, lag = 0.06, 0.08
+    ds = make_synthetic_ctd(tau=tau, lag=lag)
+    trend = np.linspace(-7.5, 7.5, ds.sizes["time"])
+    ds["t"] = ds["t"] + trend
+
     lags = np.arange(0.0, 0.16, 0.01)
     taus = np.arange(0.0, 0.12, 0.01)
     cm = tc.lag_tau_cost_map(ds, lags, taus, lowpass=4.0, pmin=50, pmax=600)
