@@ -8,6 +8,9 @@ values), and TEOS-10 derived variables. `efe`/`ecop` are carried through
 cast-tagged; `gps`/`alti` are carried through unchanged. See
 `plans/2026-09-01-fctd-pipeline-design.md` for the stage order and
 rationale.
+
+Whether `t`/`c` should be renamed to something more descriptive is an open
+question for the T-C correction analysis (FCTD reprocessing sub-project 3).
 """
 
 import logging

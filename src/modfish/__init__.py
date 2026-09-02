@@ -4,6 +4,11 @@
 Python package to work with data from FastCTD and Epsifish instruments devloped by the
 [Multiscale Ocean Dynamics](https://mod.ucsd.edu) group at the [Scripps Institution of Oceanography](https://scripps.ucsd.edu).
 
+Beyond reading legacy Matlab-gridded output, the package covers the raw-data side: `modraw`
+decodes FCTD `.modraw` files into per-stream NetCDF (L0), and `fctd` chains L0
+concatenation, cast detection, sensor corrections, and depth gridding into L1 and gridded
+products (`fctd.process_deployment`).
+
 
 # Installation
 Clone or download the [repository](https://github.com/modscripps/modfish) and install via `pip install <path-to-modfish>` or, to be able to make changes to the code on the fly, as editable package via `pip install -e <path-to-modfish>`.

@@ -37,17 +37,17 @@ class TCParams:
     phase_match : bool
         Enable phase-matching correction
     N : int
-        segment length (cruise-1 notebook: 2**7)
+        samples, segment length (cruise-1 notebook: 2**7)
     f0 : float
         LP cutoff Hz (gvpy; orphaned modfish copy had 9)
     tcfit : tuple[float, float] | None
-        None: add_tcfit_default
+        dbar, upper/lower pressure limit for the phase fit. None: add_tcfit_default
     thermal_mass : bool
         Enable thermal mass correction
     alpha : float
-        SBE manual placeholder
+        dimensionless, thermal anomaly amplitude. SBE manual placeholder
     beta : float
-        SBE manual placeholder
+        1/s, inverse relaxation time constant. SBE manual placeholder
     viscous_heating : bool
         derivation is for unpumped UCTD
     """
@@ -71,9 +71,9 @@ class GridParams:
     dz : float
         m (Matlab: 0.5)
     depth_min : float | None
-        None: from data
+        m, grid lower bound. None: from data
     depth_max : float | None
-        None: from data (Matlab clamped 0-2000)
+        m, grid upper bound. None: from data (Matlab clamped 0-2000)
     """
 
     dz: float = 0.5  # m (Matlab: 0.5)
@@ -94,7 +94,7 @@ class FCTDConfig:
     grid : GridParams
         Depth gridding parameters
     latitude_fallback : float | None
-        used, with a warning, when GPS is absent
+        degrees_north, used, with a warning, when GPS is absent
     gps_max_gap : float
         s, max GPS gap to interpolate across
     dpdt_smooth : float
