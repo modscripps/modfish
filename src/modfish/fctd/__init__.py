@@ -10,6 +10,7 @@ only in `process_deployment` and in the caller. See
 from modfish.fctd.casts import casts_to_dataset, find_casts, label_casts
 from modfish.fctd.concat import concat_l0
 from modfish.fctd.config import CastParams, FCTDConfig, GridParams, TCParams
+from modfish.fctd.l1 import make_l1
 
 __all__ = [
     "CastParams",
@@ -20,4 +21,5 @@ __all__ = [
     "concat_l0",
     "find_casts",
     "label_casts",
+    "make_l1",
 ]
