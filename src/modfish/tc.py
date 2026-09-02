@@ -78,6 +78,44 @@ def lowpassfilter(x, lowcut, fs, order=3, axis=-1):
     return lpx
 
 
+def _fill_gaps(x: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Fill NaN in a 1-D array so it can pass through a filter or an FFT.
+
+    Interior NaN are filled by linear interpolation against the sample
+    index; NaN at either edge are filled with the nearest finite value
+    (constant extrapolation), since there is nothing to interpolate
+    between. A single `numpy.interp` call gives both: values outside the
+    range of its `xp` (the finite indices) are clamped to the boundary
+    `fp` values, which is exactly edge-hold.
+
+    Parameters
+    ----------
+    x : numpy.ndarray
+        One-dimensional array, possibly containing NaN.
+
+    Returns
+    -------
+    filled : numpy.ndarray
+        Copy of `x` with every NaN replaced.
+    was_nan : numpy.ndarray
+        Boolean mask, same shape as `x`, True where `x` was NaN. Callers
+        use this to restore NaN after the finite-input step (filtering,
+        FFT) that required this function.
+
+    Notes
+    -----
+    An all-NaN input has no finite value to interpolate from or clamp
+    to; `numpy.interp` raises in that case, so this function does too.
+    """
+    x = np.asarray(x, dtype=float)
+    mask = np.isnan(x)
+    filled = x.copy()
+    if mask.any():
+        idx = np.arange(x.size)
+        filled[mask] = np.interp(idx[mask], idx[~mask], x[~mask])
+    return filled, mask
+
+
 def add_tcfit_default(ds):
     """Set a default pressure range for the T-C phase fit.
 
@@ -552,8 +590,97 @@ def plot_spectra(spectra):
     return ax
 
 
+def response_correction(
+    ds: xr.Dataset, lag: float, tau_t: float, var: str = "t"
+) -> xr.Dataset:
+    r"""Apply the sensor response model to a whole record by FFT.
+
+    The thermistor lags the conductivity cell because of its own finite
+    response time and because of the physical separation of the two
+    sensors. Both are removed in one step by multiplying the real FFT of
+    the whole (gap-filled) record by the transfer function
+
+    .. math::
+
+        H(f) = (1 + i 2 \pi f \tau_t) \exp(i 2 \pi f \, \mathrm{lag})
+
+    and inverting. This is the model `phase_correct` fits per segment in
+    the frequency domain (its `H1`), applied here to the whole record at
+    once and without `phase_correct`'s extra low-pass.
+
+    Parameters
+    ----------
+    ds : xarray.Dataset
+        CTD time series with variable `var` on an evenly sampled `time`
+        coordinate of dtype datetime64. The sampling interval is read
+        from `time`, not assumed.
+    lag : float
+        Sensor lag [s]. `exp(+i 2 pi f lag)` advances the record by
+        `lag`, so a positive `lag` means `var` (temperature) physically
+        lags conductivity, matching the sign convention of `find_lags`
+        and `phase_correct`. Negative `lag` raises `ValueError`: an
+        advance in the other direction is not expected for a FastCAT.
+    tau_t : float
+        Thermistor time constant [s]. Zero disables the `(1 + i 2 pi f
+        tau_t)` amplitude term.
+    var : str, optional
+        Name of the variable to correct. Defaults to `"t"`.
+
+    Returns
+    -------
+    out : xarray.Dataset
+        Deep copy of `ds` with `var` replaced by the response-corrected
+        record. Interior NaN present in the input are restored as NaN.
+        The last `ceil(lag * fs)` samples are additionally set to NaN,
+        since advancing the record by `lag` wraps that many samples in
+        from the record start (the FFT treats the record as periodic).
+        When `lag == 0` and `tau_t == 0` this is a copy of `ds` with `var`
+        unchanged.
+
+    Raises
+    ------
+    ValueError
+        If `lag` is negative.
+
+    Notes
+    -----
+    `fs` is `1 / median(diff(time))`, the same convention `phase_correct`
+    and `thermal_mass_correction` use, so a time gap in a concatenated
+    record perturbs at most the samples adjacent to it, not the sampling
+    rate.
+    """
+    if lag < 0:
+        raise ValueError(
+            "negative lag is not expected for a FastCAT (temperature "
+            f"advancing ahead of conductivity); got lag={lag}"
+        )
+
+    ds = ds.copy(deep=True)
+    if lag == 0 and tau_t == 0:
+        return ds
+
+    dt = float(np.median(np.diff(ds.time.data)) / np.timedelta64(1, "s"))
+    fs = 1 / dt
+
+    x_raw = ds[var].data
+    x, mask = _fill_gaps(x_raw)
+    n = x.size
+
+    f = np.fft.rfftfreq(n, d=1 / fs)
+    H = (1 + 1j * 2 * np.pi * f * tau_t) * np.exp(1j * 2 * np.pi * f * lag)
+    y = np.fft.irfft(np.fft.rfft(x) * H, n)
+
+    if lag > 0:
+        ntrail = int(np.ceil(lag * fs))
+        y[-ntrail:] = np.nan
+    y[mask] = np.nan
+
+    ds[var] = (ds[var].dims, y, ds[var].attrs)
+    return ds
+
+
 def thermal_mass_correction(
-    ds: xr.Dataset, alpha: float = 0.03, beta: float = 1 / 7
+    ds: xr.Dataset, alpha: float = 0.03, beta: float = 1 / 7, dcdt: str = "sbe"
 ) -> xr.Dataset:
     """Correct conductivity for the thermal mass of the conductivity cell.
 
@@ -575,12 +702,25 @@ def thermal_mass_correction(
         Inverse relaxation time constant [1/s] of the thermal anomaly.
         Defaults to 1/7 (SBE Data Processing manual). See Notes for
         alternatives.
+    dcdt : {"sbe", "constant"}, optional
+        Conductivity sensitivity `dc/dT` [S/m/degC] used to scale the
+        temperature-difference input to the recursion. `"sbe"` (default)
+        uses the SBE Data Processing manual's temperature-dependent form
+        `0.1 * (1 + 0.006 * (t - 20))`, evaluated per sample on the
+        (gap-filled) input `t`. `"constant"` uses the fixed `0.1` this
+        function used before this parameter existed, and the value Lueck
+        & Picklo (1990) and the dead MATLAB toolbox branch used
+        throughout. The two agree exactly at 20 degC; over 3 to 27 degC
+        they differ by up to about 10% (see the table below).
 
     Returns
     -------
     out : xarray.Dataset
         Deep copy of `ds` with `c` replaced by the thermal-mass-corrected
-        conductivity. `ds` itself is not modified.
+        conductivity. `ds` itself is not modified. NaN in the input `t`
+        do not propagate into `c`: both `t` and `c` are gap-filled for the
+        recursion, and the interior-NaN mask captured from the input `c`
+        is restored on the output.
 
     Notes
     -----
@@ -596,13 +736,14 @@ def thermal_mass_correction(
     Choosing `alpha` and `beta` is the subject of the T-C correction analysis
     (FCTD reprocessing sub-project 3). Values seen in the wild:
 
-    ==================================  =========  =========
-    source                              alpha      1/beta
-    ==================================  =========  =========
-    SBE Data Processing manual (SBE49)  0.03       7.0
-    Lueck & Picklo (1990)               0.02       0.10
-    dead MATLAB toolbox branch          0.02       0.10
-    ==================================  =========  =========
+    ======================================  =========  =========
+    source                                  alpha      1/beta
+    ======================================  =========  =========
+    SBE Data Processing manual (SBE49)      0.03       7.0
+    Lueck & Picklo (1990)                   0.02       0.10
+    dead MATLAB toolbox branch              0.02       0.10
+    Andriatis/Pinkel TFO 2021, serial 537   0.134      3.95
+    ======================================  =========  =========
 
     The SBE Data Processing manual formula, given for reference and not
     used here:
@@ -616,13 +757,22 @@ def thermal_mass_correction(
 
     with `dT` the sample-to-sample temperature difference and `ctm` in S/m.
     """
+    if dcdt not in ("sbe", "constant"):
+        raise ValueError(f"dcdt must be 'sbe' or 'constant', got {dcdt!r}")
+
     ds = ds.copy(deep=True)
 
     dt = float(np.median(np.diff(ds.time.data)) / np.timedelta64(1, "s"))
     fn = 1 / (2 * dt)
-    gamma = 0.1
 
-    T = ds.t.data
+    T, _ = _fill_gaps(ds.t.data)
+    C, c_mask = _fill_gaps(ds.c.data)
+
+    if dcdt == "sbe":
+        gamma = 0.1 * (1 + 0.006 * (T - 20))
+    else:
+        gamma = np.full_like(T, 0.1)
+
     dTp = np.diff(T, prepend=T[0])
     dTp[0] = dTp[1]
     ctm = np.zeros_like(dTp)
@@ -630,15 +780,15 @@ def thermal_mass_correction(
     aa = 4 * fn * alpha / beta / (1 + 4 * fn / beta)
     bb = 1 - 2 * aa / alpha
     for ii in range(1, len(ctm)):
-        ctm[ii] = -bb * ctm[ii - 1] + aa * gamma * dTp[ii]
+        ctm[ii] = -bb * ctm[ii - 1] + aa * gamma[ii] * dTp[ii]
 
-    ds["c"] = ds.c + ctm
+    c_out = C + ctm
+    c_out[c_mask] = np.nan
+    ds["c"] = (ds.c.dims, c_out, ds.c.attrs)
     return ds
 
 
-def viscous_heating_temperature_correction(
-    v, Pr: float = 15.0, scale: float = 2.0
-) -> np.ndarray:
+def viscous_heating_temperature_correction(v, Pr: float = 12.4) -> np.ndarray:
     r"""Temperature error from viscous heating of an unpumped sensor.
 
     Flow past an unpumped thermistor dissipates kinetic energy at the sensor
@@ -657,11 +807,10 @@ def viscous_heating_temperature_correction(
     v : array-like
         Flow speed past the sensor [m/s].
     Pr : float, optional
-        Prandtl number. Defaults to 15.0.
-    scale : float, optional
-        Multiplicative factor applied to the Ullman & Hebert formula.
-        Defaults to 2.0, an undocumented empirical factor carried over from
-        the original code; its origin is not recorded.
+        Prandtl number. Defaults to 12.4, seawater's value at 2 degC
+        (Larson & Pedersen, 1996), the design temperature for the T-C
+        correction analysis's viscous-heating bound (FCTD reprocessing
+        sub-project 3).
 
     Returns
     -------
@@ -672,10 +821,16 @@ def viscous_heating_temperature_correction(
     -----
     The Ullman & Hebert derivation is for an unpumped sensor. It is not
     applicable to the pumped SBE49 and is off by default in the FCTD
-    pipeline.
+    pipeline; `correct` runs it only when `viscous_heating=True`, to bound
+    the effect rather than to apply it routinely.
+
+    An earlier version of this function multiplied the formula by an
+    undocumented `scale=2.0` factor of unknown origin. It has been
+    dropped: the formula above is Ullman & Hebert's as published, with no
+    empirical adjustment.
     """
     v = np.asarray(v)
-    return scale * 0.8e-4 * Pr**0.5 * v**2
+    return 0.8e-4 * Pr**0.5 * v**2
 
 
 def find_lags(ds: xr.Dataset, window: int = 80) -> tuple[np.ndarray, np.ndarray]:
@@ -756,3 +911,170 @@ def find_lags(ds: xr.Dataset, window: int = 80) -> tuple[np.ndarray, np.ndarray]
         wi.append(np.mean(dpdt[tr]))
 
     return np.array(lagi), np.array(wi)
+
+
+def correct(
+    ds: xr.Dataset,
+    lag: float = 0.0,
+    tau_t: float = 0.0,
+    lowpass: float | None = None,
+    thermal_mass: bool = False,
+    alpha: float = 0.03,
+    beta: float = 1 / 7,
+    viscous_heating: bool = False,
+    pr: float = 12.4,
+) -> xr.Dataset:
+    """Apply the T-C sensor response correction chain to a CTD record.
+
+    Every parameter is explicit; the library default (every argument at
+    its default) is a no-op, so a cruise config opts into each step. The
+    steps run in this fixed order, each skippable independently:
+
+    0. Gap fill. Interior NaN in `t` and `c` are linearly interpolated in
+       time for the duration of each step that needs finite input and
+       restored to NaN afterwards (a mask captured fresh at each step,
+       equivalent to one mask carried through since no step removes an
+       existing NaN; `response_correction` also adds new trailing NaN,
+       see step 2). Handled internally by `_fill_gaps`, `response_correction`
+       and `thermal_mass_correction`; nothing extra is needed here beyond
+       the low-pass step, which needs finite input too.
+    1. Low-pass. `t` and `c` are zero-phase Butterworth filtered
+       (`lowpassfilter`, order 3) at `lowpass` Hz. Skipped when `lowpass`
+       is None.
+    2. Sensor response, on `t`. `response_correction(ds, lag, tau_t)`
+       multiplies the whole record's real FFT by
+       `H(f) = (1 + i 2 pi f tau_t) exp(i 2 pi f lag)` and inverts.
+       `exp(+i 2 pi f lag)` advances the record by `lag`, so a positive
+       `lag` means `t` physically lags `c`, matching `find_lags` and
+       `phase_correct`. Skipped when both `lag` and `tau_t` are 0.
+
+       This step runs on the low-passed record, not the raw one, because
+       the derivative-like `tau_t` term amplifies noise without bound
+       towards Nyquist; the low-pass in step 1 is what keeps that finite.
+       It runs as a whole-record FFT rather than the time-domain form
+       `t_corrected = t + tau_t * dt/dt_sample` a central difference
+       would suggest, because that finite-difference derivative
+       underestimates the true derivative near the cutoff at 16 Hz. A
+       numerical check during design review (`tests/test_tc.py`, true
+       lag 0.08 s, tau_t 0.06 s, 4 Hz low-pass) found central differences
+       bias the fitted tau_t high by nearly a factor of two (roughness
+       minimum at tau_t = 0.11 s against the true 0.06 s), while the FFT
+       transfer function recovers the clean signal to within 1.3% of the
+       uncorrected residual against 8.9% for the central-difference
+       version; `test_correct_true_parameters_recover_clean_signal` pins
+       the 10x gap between them. The correction is therefore applied in
+       the frequency domain; time-domain estimators (`find_lags`, the
+       roughness cost map) are unaffected, since they only measure `lag`
+       and `tau_t`, they do not differentiate to apply them.
+    3. Thermal mass, on `c`. `thermal_mass_correction(ds, alpha, beta)`,
+       with `dc/dT = 0.1 * (1 + 0.006 * (t - 20))` evaluated on the
+       (already response-corrected) `t`. Skipped when `thermal_mass` is
+       False.
+    4. Viscous heating, on `t`. `t <- t - 0.8e-4 * pr**0.5 * v**2` with
+       `v = |dPdt|` (dbar/s taken as m/s). Off by default; kept to bound
+       the effect on an unpumped-sensor assumption that does not strictly
+       hold for the pumped SBE49.
+
+    `p` is never filtered or otherwise touched.
+
+    Parameters
+    ----------
+    ds : xarray.Dataset
+        CTD time series with `t`, `c`, `p`, `dPdt` on an evenly sampled
+        `time` coordinate of dtype datetime64. The sampling interval is
+        read from `time`, not assumed.
+    lag : float, optional
+        Sensor lag [s] for the response step, `lag > 0` meaning `t`
+        lags `c`. Defaults to 0.0 (no advance).
+    tau_t : float, optional
+        Thermistor time constant [s] for the response step. Defaults to
+        0.0 (amplitude term disabled).
+    lowpass : float or None, optional
+        Cut-off frequency [Hz] of the zero-phase low-pass on `t` and `c`.
+        Defaults to None (no low-pass).
+    thermal_mass : bool, optional
+        Whether to run the thermal-mass correction on `c`. Defaults to
+        False.
+    alpha : float, optional
+        Thermal-mass amplitude, passed to `thermal_mass_correction`.
+        Defaults to 0.03 (SBE Data Processing manual).
+    beta : float, optional
+        Thermal-mass inverse relaxation time [1/s], passed to
+        `thermal_mass_correction`. Defaults to 1/7 (SBE Data Processing
+        manual).
+    viscous_heating : bool, optional
+        Whether to run the viscous-heating correction on `t`. Defaults
+        to False.
+    pr : float, optional
+        Prandtl number, passed to
+        `viscous_heating_temperature_correction`. Defaults to 12.4.
+
+    Returns
+    -------
+    out : xarray.Dataset
+        Deep copy of `ds` on the same `time` axis (no reindexing), with
+        `t` and `c` carrying the requested corrections. `t.attrs["processing"]`
+        and `c.attrs["processing"]` each list the steps that touched that
+        variable as `"; "`-joined strings (`"none"` if none did), and
+        `ds.attrs["corrections"]` is a function-call-style summary of the
+        whole chain with every parameter used, in the sub-project 2
+        style (`"none"` if nothing was applied).
+
+    Notes
+    -----
+    With every argument at its default, this function returns an
+    unmodified copy of `ds`: `t`, `c`, `p` and `dPdt` are byte-for-byte
+    identical to the input, and both `processing` attrs and
+    `attrs["corrections"]` read `"none"`.
+    """
+    ds = ds.copy(deep=True)
+
+    dt = float(np.median(np.diff(ds.time.data)) / np.timedelta64(1, "s"))
+    fs = 1 / dt
+
+    t_steps: list[str] = []
+    c_steps: list[str] = []
+    corrections: list[str] = []
+
+    if lowpass is not None:
+        t_attrs = dict(ds["t"].attrs)
+        c_attrs = dict(ds["c"].attrs)
+
+        t_raw, t_mask = _fill_gaps(ds["t"].data)
+        c_raw, c_mask = _fill_gaps(ds["c"].data)
+        t_lp = lowpassfilter(t_raw, lowcut=lowpass, fs=fs)
+        c_lp = lowpassfilter(c_raw, lowcut=lowpass, fs=fs)
+        t_lp[t_mask] = np.nan
+        c_lp[c_mask] = np.nan
+
+        ds["t"] = (ds["t"].dims, t_lp, t_attrs)
+        ds["c"] = (ds["c"].dims, c_lp, c_attrs)
+
+        t_steps.append(f"lowpass {lowpass} Hz")
+        c_steps.append(f"lowpass {lowpass} Hz")
+        corrections.append(f"lowpassfilter(lowcut={lowpass}, fs={fs})")
+
+    if lag != 0 or tau_t != 0:
+        ds = response_correction(ds, lag=lag, tau_t=tau_t, var="t")
+        t_steps.append(f"response lag {lag:.3f} s tau {tau_t:.3f} s")
+        corrections.append(f"response_correction(lag={lag}, tau_t={tau_t})")
+
+    if thermal_mass:
+        ds = thermal_mass_correction(ds, alpha=alpha, beta=beta)
+        c_steps.append(f"thermal mass alpha={alpha} beta={beta}")
+        corrections.append(f"thermal_mass_correction(alpha={alpha}, beta={beta})")
+
+    if viscous_heating:
+        v = np.abs(ds["dPdt"].data)
+        dT = viscous_heating_temperature_correction(v, Pr=pr)
+        t_attrs = dict(ds["t"].attrs)
+        ds["t"] = ds["t"] - dT
+        ds["t"].attrs = t_attrs
+        t_steps.append(f"viscous heating pr={pr}")
+        corrections.append(f"viscous_heating_temperature_correction(pr={pr})")
+
+    ds["t"].attrs["processing"] = "; ".join(t_steps) if t_steps else "none"
+    ds["c"].attrs["processing"] = "; ".join(c_steps) if c_steps else "none"
+    ds.attrs["corrections"] = "; ".join(corrections) if corrections else "none"
+
+    return ds

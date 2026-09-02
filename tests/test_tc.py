@@ -190,7 +190,7 @@ def test_thermal_mass_correction_matches_reference_recursion():
     ctm = np.zeros_like(dTp)
     for i in range(1, len(ctm)):
         ctm[i] = -bb * ctm[i - 1] + aa * gamma * dTp[i]
-    out = tc.thermal_mass_correction(ds, alpha=alpha, beta=beta)
+    out = tc.thermal_mass_correction(ds, alpha=alpha, beta=beta, dcdt="constant")
     np.testing.assert_allclose(out.c.data, ds.c.data + ctm, rtol=1e-10)
 
 
@@ -201,14 +201,103 @@ def test_thermal_mass_correction_does_not_mutate_input():
     np.testing.assert_array_equal(ds.c.data, before)
 
 
-def test_viscous_heating_formula():
-    v = np.array([0.0, 1.0, 2.0])
-    dT = tc.viscous_heating_temperature_correction(v, Pr=15.0, scale=2.0)
-    np.testing.assert_allclose(dT, 2 * 0.8e-4 * np.sqrt(15.0) * v**2)
-
-
 def test_find_lags_recovers_known_lag():
     ds = make_synthetic_ctd(tau=0.0, lag=4 / 16.0)  # pure 4-sample lag
     lags, w = tc.find_lags(ds)
     assert np.nanmedian(lags) == pytest.approx(4 / 16.0, abs=1 / 16.0)
     assert len(lags) == len(w)
+
+
+def _clean_signal(ds):
+    # make_synthetic_ctd: c = 3.5 + 0.05 * s, so s = (c - 3.5) / 0.05
+    return (ds.c.data - 3.5) / 0.05
+
+
+def test_response_correction_pure_lag_shifts_impulse_and_leaves_trailing_nan():
+    ds = make_synthetic_ctd().isel(time=slice(0, 256))
+    imp = np.zeros(256); imp[100] = 1.0
+    ds["t"] = ("time", imp)
+    out = tc.response_correction(ds, lag=4 / 16.0, tau_t=0.0)
+    assert np.argmax(np.nan_to_num(out.t.data)) == 96
+    assert np.isnan(out.t.data[-4:]).all()
+    assert np.isfinite(out.t.data[:-4]).all()
+
+
+def test_response_correction_negative_lag_raises():
+    ds = make_synthetic_ctd().isel(time=slice(0, 64))
+    with pytest.raises(ValueError):
+        tc.response_correction(ds, lag=-0.05, tau_t=0.0)
+
+
+def test_response_correction_restores_interior_nan_only():
+    ds = make_synthetic_ctd().isel(time=slice(0, 512))
+    ds["t"][200:210] = np.nan
+    out = tc.response_correction(ds, lag=0.08, tau_t=0.06)
+    assert np.isnan(out.t.data[200:210]).all()
+    assert np.isfinite(out.t.data[:200]).all()
+    assert np.isfinite(out.t.data[210:-2]).all()
+
+
+def test_correct_true_parameters_recover_clean_signal():
+    # Review check 2026-09-02 measured 0.013 for the FFT application and
+    # 0.089 for a central-difference time-domain version; 0.1 separates them.
+    tau, lag = 0.06, 0.08
+    ds = make_synthetic_ctd(tau=tau, lag=lag)
+    out = tc.correct(ds, lag=lag, tau_t=tau, lowpass=4.0)
+    s = _clean_signal(ds)
+    s_lp = tc.lowpassfilter(s, lowcut=4.0, fs=16.0)
+    recovered = (out.t.data - 10.0) / 0.5
+    resid = np.nanstd(recovered[200:-200] - s_lp[200:-200])
+    resid_raw = np.std(((ds.t.data - 10.0) / 0.5)[200:-200] - s_lp[200:-200])
+    assert resid < 0.1 * resid_raw
+
+
+def test_correct_keeps_time_axis_and_stamps_processing():
+    ds = make_synthetic_ctd()
+    out = tc.correct(ds, lag=0.1, tau_t=0.05, lowpass=4.0, thermal_mass=True)
+    assert out.time.equals(ds.time)
+    assert "response lag 0.100 s tau 0.050 s" in out.t.attrs["processing"]
+    assert "thermal mass" in out.c.attrs["processing"]
+    assert "lowpass 4.0 Hz" in out.c.attrs["processing"]
+    assert out.attrs["corrections"] != "none"
+
+
+def test_correct_defaults_are_noop():
+    ds = make_synthetic_ctd()
+    out = tc.correct(ds)
+    np.testing.assert_array_equal(out.t.data, ds.t.data)
+    np.testing.assert_array_equal(out.c.data, ds.c.data)
+    assert out.t.attrs["processing"] == "none"
+    assert out.attrs["corrections"] == "none"
+
+
+def test_thermal_mass_sbe_dcdt_equals_constant_at_20degc():
+    # Window moved from the brief's [0:64] to [300:364]: make_synthetic_ctd
+    # builds t with a whole-record irfft(rfft(s) * H_inv), and s (a cumsum,
+    # not periodic) leaves a Gibbs-type edge transient at the record start
+    # (measured: t swings 17.4-19.9 degC over the first 4 samples even after
+    # recentering to mean 20, vs +-0.03 degC by [300:364]). At the edge, the
+    # sbe/constant difference is 3.5e-5 (350x the tolerance below); away from
+    # it, where the window is actually close to 20 degC as intended, it is
+    # 1.4e-8. This test is about the dcdt formula, not the fixture's startup
+    # transient, so the window avoids it.
+    ds = make_synthetic_ctd().isel(time=slice(300, 364))
+    ds["t"] = ds.t - ds.t.mean() + 20.0
+    a = tc.thermal_mass_correction(ds, dcdt="sbe")
+    b = tc.thermal_mass_correction(ds, dcdt="constant")
+    np.testing.assert_allclose(a.c.data, b.c.data, atol=1e-7)
+
+
+def test_thermal_mass_nan_in_t_does_not_poison_c():
+    ds = make_synthetic_ctd().isel(time=slice(0, 64))
+    ds["t"][30:33] = np.nan
+    out = tc.thermal_mass_correction(ds)
+    assert np.isfinite(out.c.data).all()
+
+
+def test_viscous_heating_formula_no_scale():
+    v = np.array([0.0, 1.0, 2.0])
+    np.testing.assert_allclose(
+        tc.viscous_heating_temperature_correction(v, Pr=12.4),
+        0.8e-4 * np.sqrt(12.4) * v**2,
+    )
