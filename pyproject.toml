@@ -31,6 +31,7 @@ dependencies = [
     "xarray>=2025.1",
     "pandas>=2.0",
     "netcdf4>=1.7",
+    "pyyaml>=6.0.3",
 ]
 
 [project.urls]
@@ -45,7 +46,7 @@ Changelog = "https://github.com/modscripps/modfish/blob/main/HISTORY.md"
 # options are explained here:
 # https://learn.scientific-python.org/development/guides/pytest/
 # minversion = "6.0"
-# addopts = ["-ra", "--showlocals", "--strict-markers", "--strict-config"]
+addopts = ["-m", "not slow"]
 # xfail_strict = true
 # filterwarnings = ["error"]
 # log_cli_level = "info"
