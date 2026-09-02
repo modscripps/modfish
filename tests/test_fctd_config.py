@@ -41,3 +41,10 @@ def test_from_dict_malformed_nested_section_raises():
 def test_from_dict_nested_section_as_list_raises():
     with pytest.raises(ValueError, match="tc"):
         FCTDConfig.from_dict({"tc": ["smooth", 20]})
+
+
+def test_from_dict_scalar_field_given_dict_raises():
+    # A dict value for a scalar field must not be silently ignored (which
+    # would leave the default in place).
+    with pytest.raises(ValueError, match="latitude_fallback"):
+        FCTDConfig.from_dict({"latitude_fallback": {"oops": 1}})

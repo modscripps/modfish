@@ -236,6 +236,12 @@ def _apply_tc(ctd: xr.Dataset, config: FCTDConfig) -> xr.Dataset:
         `attrs["corrections"]` set to a human-readable summary of the
         steps applied, each with its parameters (or "none").
         `attrs["tau1"]`/`attrs["L1"]` are set when phase matching runs.
+        `attrs["tcfit"]` is also set then, to the tcfit range actually
+        used by the fit: `config.tc.tcfit` when given, otherwise the
+        range `tc.add_tcfit_default` resolved (never the unresolved
+        `None`), read back from `phase_correct`'s own output attrs. The
+        same resolved value is recorded in the `phase_correct(...)` entry
+        of `attrs["corrections"]`.
     """
     ctd = ctd.assign(t_raw=ctd["t"].copy(deep=True), c_raw=ctd["c"].copy(deep=True))
     ctd["t_raw"].attrs = dict(ctd["t"].attrs)
@@ -252,7 +258,15 @@ def _apply_tc(ctd: xr.Dataset, config: FCTDConfig) -> xr.Dataset:
         work = tc.phase_correct(ctd, N=tc_cfg.N, f0=tc_cfg.f0, tcfit=tc_cfg.tcfit)
         ctd.attrs["tau1"] = float(work.attrs["tau1"])
         ctd.attrs["L1"] = float(work.attrs["L1"])
-        corrections.append(f"phase_correct(N={tc_cfg.N}, f0={tc_cfg.f0}, tcfit={tc_cfg.tcfit})")
+        # tc_cfg.tcfit is None when the default kicked in; phase_correct
+        # resolves the actual range used (add_tcfit_default's pick) into
+        # work.attrs["tcfit"], so take that back rather than recording the
+        # unresolved None.
+        resolved_tcfit = work.attrs.get("tcfit", tc_cfg.tcfit)
+        ctd.attrs["tcfit"] = resolved_tcfit
+        corrections.append(
+            f"phase_correct(N={tc_cfg.N}, f0={tc_cfg.f0}, tcfit={resolved_tcfit})"
+        )
     else:
         work = ctd
 
@@ -348,7 +362,12 @@ def make_l1(tree: xr.DataTree, config: FCTDConfig | None = None) -> xr.DataTree:
         Propagated from `_add_position` when there is no usable GPS fix
         and `config.latitude_fallback` is None. Also raised directly when
         `find_casts` detects zero casts in the record, naming the sample
-        count and `config.casts`.
+        count and `config.casts`. Also raised directly when the incoming
+        `ctd` group already has `t_raw`/`c_raw` (i.e. `tree` came from
+        `concat_l0(..., keep_counts=True)`): this stage's own `t_raw`/
+        `c_raw` assignment in `_apply_tc` would unconditionally overwrite
+        the kept count-typed variables with physical `t`/`c` copies,
+        silently discarding them.
 
     Notes
     -----
@@ -360,12 +379,38 @@ def make_l1(tree: xr.DataTree, config: FCTDConfig | None = None) -> xr.DataTree:
     and stays valid. This is intended, not a bug: `_add_position` stamps
     the same explanation onto `ctd.attrs["latitude_source_note"]` for
     anyone inspecting the product without having read this docstring.
+
+    When phase matching is enabled, `config.tc.tcfit`'s pressure range
+    selects the fit's contiguous index span rather than a per-sample mask
+    (see `TCParams.tcfit`); on a deployment record with multiple casts,
+    the fit effectively sees the whole record, surface soaks included, not
+    just the casts that pass through the pressure range. Per-cast or
+    masked-segment fitting is a FCTD reprocessing sub-project 3 item.
+
+    Phase matching also low-pass filters `t` and `c` (and, inside
+    `tc.phase_correct`, `p`), but `_apply_tc` only takes the corrected
+    `t`/`c` back from that step; `p` keeps its original measured (i.e.
+    unfiltered) values. Derived salinity (`SP`, `SA`, and downstream `CT`,
+    `sgth0`) is therefore computed from filtered `t`/`c` together with
+    unfiltered `p`.
     """
     if config is None:
         config = FCTDConfig()
 
     ctd = tree["ctd"].to_dataset()
     ctd.attrs = {**tree.attrs, **ctd.attrs}
+
+    if "t_raw" in ctd.data_vars or "c_raw" in ctd.data_vars:
+        raise ValueError(
+            "ctd group already contains t_raw/c_raw: this tree looks like "
+            "it came from concat_l0(..., keep_counts=True). make_l1 is "
+            "incompatible with keep_counts=True: it assigns its own "
+            "t_raw/c_raw (physical pre-correction copies of t/c) "
+            "unconditionally, which would silently overwrite the kept "
+            "count-typed values. Counts live in the per-file L0 netCDFs; "
+            "concat with keep_counts=False (the default) before make_l1."
+        )
+
     gps = tree["gps"].to_dataset() if "gps" in tree.children else None
     efe = tree["efe"].to_dataset() if "efe" in tree.children else None
     ecop = tree["ecop"].to_dataset() if "ecop" in tree.children else None

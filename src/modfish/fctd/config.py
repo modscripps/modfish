@@ -41,7 +41,14 @@ class TCParams:
     f0 : float
         LP cutoff Hz (gvpy; orphaned modfish copy had 9)
     tcfit : tuple[float, float] | None
-        dbar, upper/lower pressure limit for the phase fit. None: add_tcfit_default
+        dbar, upper/lower pressure limit for the phase fit. None: add_tcfit_default.
+        The pressure range is converted to the contiguous first-to-last
+        in-range sample index span, not a per-sample mask; on a multi-cast
+        deployment record that span runs from the first descent into the
+        range on the first cast to the last ascent out of it on the last
+        cast, so it effectively covers the whole record, surface soaks
+        included. Per-cast or masked-segment fitting is a FCTD reprocessing
+        sub-project 3 item.
     thermal_mass : bool
         Enable thermal mass correction
     alpha : float
@@ -130,7 +137,8 @@ class FCTDConfig:
         Raises
         ------
         ValueError
-            If unknown keys are provided or if nested sections are not dicts.
+            If unknown keys are provided, if nested sections are not dicts,
+            or if a scalar (non-section) field is given a dict value.
         """
         # Mapping of nested section names to their dataclass types and field sets
         nested_sections = {
@@ -178,7 +186,11 @@ class FCTDConfig:
         for field in dataclasses.fields(FCTDConfig):
             if field.name in nested_sections:
                 continue  # Already processed above
-            if field.name in d and not isinstance(d[field.name], dict):
+            if field.name in d:
+                if isinstance(d[field.name], dict):
+                    raise ValueError(
+                        f"{field.name} is a scalar field, got a dict: {d[field.name]!r}"
+                    )
                 result_kwargs[field.name] = d[field.name]
 
         return cls(**result_kwargs)

@@ -116,6 +116,10 @@ def test_phase_correct_uses_tcfit_attr_when_no_argument():
     ds.attrs["tcfit"] = (100, 600)
     out = tc.phase_correct(ds)
     assert out.attrs["tau1"] == pytest.approx(0.06, rel=0.3)
+    # Pins that the attr path actually ran (not the argument path, and not
+    # add_tcfit_default silently overriding it): ds.attrs["tcfit"] comes
+    # through onto the output unchanged, exact tuple.
+    assert out.attrs["tcfit"] == (100, 600)
 
 
 def test_phase_correct_falls_back_to_default_tcfit():

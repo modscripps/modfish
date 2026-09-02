@@ -35,6 +35,22 @@ def test_l1_phase_match_stamps_attrs_keeps_axis(l0_tree):
     assert "tau1" in l1["ctd"].attrs
     assert np.isnan(l1["ctd"].t.data).sum() > 0        # trimmed edges are NaN
     assert not np.array_equal(l1["ctd"].t.data, l1["ctd"].t_raw.data)
+    # Explicit tcfit is recorded as-given: dedicated attr and corrections string.
+    assert tuple(l1["ctd"].attrs["tcfit"]) == (50, 290)
+    assert "tcfit=(50, 290)" in l1["ctd"].attrs["corrections"]
+
+
+def test_l1_phase_match_default_tcfit_resolved_not_none(l0_tree):
+    # When tcfit is left at its config default (None), phase_correct picks
+    # a range internally (tc.add_tcfit_default); the resolved range, not
+    # the unresolved None, must land in ctd.attrs and the corrections
+    # string.
+    cfg = FCTDConfig(tc=TCParams(phase_match=True, tcfit=None))
+    l1 = make_l1(l0_tree, cfg)
+    ctd = l1["ctd"]
+    assert ctd.attrs["tcfit"] is not None
+    assert "tcfit=None" not in ctd.attrs["corrections"]
+    assert f"tcfit={ctd.attrs['tcfit']}" in ctd.attrs["corrections"]
 
 
 def test_l1_phase_match_thermal_mass_viscous_conductivity_finite(l0_tree):
@@ -166,3 +182,15 @@ def test_l1_no_gps_no_fallback_raises(tmp_path):
     cfg = FCTDConfig(latitude_fallback=2.0, tc=TCParams(phase_match=False))
     l1 = make_l1(tree, cfg)
     assert l1["ctd"].attrs["latitude_source"] == "fallback"
+
+
+def test_l1_keep_counts_tree_raises(tmp_path):
+    # concat_l0(..., keep_counts=True) leaves count-typed t_raw/c_raw on
+    # the ctd group; make_l1's own t_raw/c_raw assignment in _apply_tc
+    # would silently overwrite them with physical t/c copies, so make_l1
+    # must refuse rather than discard the kept data.
+    files = write_l0_files(tmp_path, n_files=3, minutes=12.0, p_fn=two_cast_p)
+    tree = concat_l0(files, keep_counts=True)
+    assert "t_raw" in tree["ctd"].to_dataset().data_vars
+    with pytest.raises(ValueError, match="keep_counts"):
+        make_l1(tree, FCTDConfig(tc=TCParams(phase_match=False)))

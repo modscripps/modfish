@@ -5,6 +5,8 @@ only. No FCTD-specific variable names appear here so the same detection
 serves L1 processing and gridding.
 """
 
+import logging
+
 import numpy as np
 import pandas as pd
 import xarray as xr
@@ -12,6 +14,8 @@ from scipy.ndimage import uniform_filter1d
 from scipy.signal import medfilt
 
 from modfish.fctd.config import CastParams
+
+logger = logging.getLogger(__name__)
 
 
 def _sampling_rate(time: np.ndarray) -> float:
@@ -130,6 +134,7 @@ def find_casts(
     dpdt = np.gradient(p_smooth) * fs  # dbar/s, length N
 
     rows = []
+    n_rejected = 0
     for mask, direction in ((dpdt > params.wlim, "down"), (dpdt < -params.wlim, "up")):
         for i0, i1 in _contiguous_runs(mask):
             if i1 <= i0:
@@ -138,6 +143,16 @@ def find_casts(
             duration = (time[i1] - time[i0]) / np.timedelta64(1, "s")
             if p_range >= params.min_range and duration >= params.min_duration:
                 rows.append((i0, i1, direction))
+            else:
+                n_rejected += 1
+
+    if n_rejected > 0:
+        logger.info(
+            "find_casts: %d candidate run(s) rejected by min_range=%s/min_duration=%s",
+            n_rejected,
+            params.min_range,
+            params.min_duration,
+        )
 
     rows.sort(key=lambda r: r[0])
     casts = pd.DataFrame(rows, columns=["i0", "i1", "direction"])
