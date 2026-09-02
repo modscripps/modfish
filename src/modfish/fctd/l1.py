@@ -23,6 +23,24 @@ from modfish.fctd.config import FCTDConfig
 
 logger = logging.getLogger(__name__)
 
+#: Prandtl number and empirical scale factor passed to
+#: `tc.viscous_heating_temperature_correction`, matching that function's
+#: own defaults (`scale=2.0` is the undocumented empirical factor its
+#: docstring flags as provenance-less; recorded here so `_apply_tc` can
+#: stamp the actual values used into `attrs["corrections"]`).
+_VISCOUS_PR = 15.0
+_VISCOUS_SCALE = 2.0
+
+#: Human-readable note stamped onto `ctd.attrs` when position falls back
+#: to a fixed latitude: `lon` is NaN in that case, which propagates into
+#: every gsw call that needs a real position.
+_FALLBACK_SALINITY_NOTE = (
+    "latitude_source=fallback leaves lon all-NaN; SA, CT, and sgth0 "
+    "(which require a real position) come out all-NaN too. Only SP "
+    "(computed from t, c, p alone) is valid among the derived salinity "
+    "variables."
+)
+
 
 def _nearest_gap_seconds(time: np.ndarray, ref_time: np.ndarray) -> np.ndarray:
     """Time gap, seconds, from each `time` sample to the nearest `ref_time` sample.
@@ -53,7 +71,11 @@ def _add_position(ctd: xr.Dataset, gps: xr.Dataset | None, config: FCTDConfig) -
 
     Stretches of ctd time further than `config.gps_max_gap` from the
     nearest GPS fix are masked: `lon` is set to NaN, and `lat` is set to
-    `config.latitude_fallback` if given, else NaN.
+    `config.latitude_fallback` if given, else NaN. Samples beyond the GPS
+    record's own time span are extrapolated as a constant equal to the
+    nearest endpoint (`np.interp`'s default clamping behavior); that
+    clamp only matters up to `gps_max_gap` past the GPS range, since
+    stretches beyond it are masked the same as any other gap.
 
     Parameters
     ----------
@@ -104,6 +126,7 @@ def _add_position(ctd: xr.Dataset, gps: xr.Dataset | None, config: FCTDConfig) -
         ctd["lat"].attrs = dict(long_name="latitude", units="degrees_north")
         ctd["lon"].attrs = dict(long_name="longitude", units="degrees_east")
         ctd.attrs["latitude_source"] = "fallback"
+        ctd.attrs["latitude_source_note"] = _FALLBACK_SALINITY_NOTE
         return ctd
 
     gps_time = gps["time"].values[valid]
@@ -180,13 +203,20 @@ def _apply_tc(ctd: xr.Dataset, config: FCTDConfig) -> xr.Dataset:
 
     Stashes `t_raw`/`c_raw` before any correction. Phase matching
     (`config.tc.phase_match`) runs `tc.phase_correct`, whose output lands
-    on a trimmed time axis (segmenting loses the edges); it is reindexed
-    back onto the full ctd time axis before overwriting `t`/`c`, so the
-    output keeps the input's sample count with NaN at the uncovered edges.
-    Thermal-mass correction (`config.tc.thermal_mass`) modifies `c`.
-    Viscous-heating correction (`config.tc.viscous_heating`) subtracts a
-    dPdt-derived temperature error from `t`; the derivation is for an
-    unpumped sensor and is off by default.
+    on a trimmed time axis (segmenting loses the edges) that is otherwise
+    NaN-free. Thermal-mass (`config.tc.thermal_mass`) and viscous-heating
+    (`config.tc.viscous_heating`) corrections, when also enabled, run on
+    that same trimmed, NaN-free working dataset rather than on a
+    pre-reindexed one: `thermal_mass_correction`'s recursive filter
+    propagates the first NaN it sees through every later sample
+    (`tc.py:632-633`), so feeding it the trimmed axis's NaN-padded
+    reindexed form would silently turn the whole `c` record NaN. The
+    working dataset is reindexed back onto the full ctd time axis once, at
+    the end, only if phase matching ran (with `thermal_mass`/
+    `viscous_heating` alone, the input is already the full, finite axis
+    and no reindex is needed). `t`/`c` attrs, which xarray arithmetic and
+    `reindex` are not reliably guaranteed to carry through every step, are
+    saved before any correction and reattached at the end.
 
     Parameters
     ----------
@@ -198,39 +228,54 @@ def _apply_tc(ctd: xr.Dataset, config: FCTDConfig) -> xr.Dataset:
     Returns
     -------
     xr.Dataset
-        `ctd` with `t_raw`, `c_raw` added, `t`/`c` corrected per config,
-        and `attrs["corrections"]` set to a human-readable summary of the
-        steps applied (or "none"). `attrs["tau1"]`/`attrs["L1"]` are set
-        when phase matching runs.
+        `ctd` with `t_raw`, `c_raw` added, `t`/`c` corrected per config
+        (attrs preserved from the pre-correction `t`/`c`), and
+        `attrs["corrections"]` set to a human-readable summary of the
+        steps applied, each with its parameters (or "none").
+        `attrs["tau1"]`/`attrs["L1"]` are set when phase matching runs.
     """
     ctd = ctd.assign(t_raw=ctd["t"].copy(deep=True), c_raw=ctd["c"].copy(deep=True))
     ctd["t_raw"].attrs = dict(ctd["t"].attrs)
     ctd["c_raw"].attrs = dict(ctd["c"].attrs)
 
+    t_attrs = dict(ctd["t"].attrs)
+    c_attrs = dict(ctd["c"].attrs)
+
     tc_cfg = config.tc
     corrections = []
+    original_time = ctd["time"]
 
     if tc_cfg.phase_match:
-        original_time = ctd["time"]
-        corrected = tc.phase_correct(ctd, N=tc_cfg.N, f0=tc_cfg.f0, tcfit=tc_cfg.tcfit)
-        corrected = corrected.reindex(time=original_time)
-        ctd["t"] = corrected["t"]
-        ctd["c"] = corrected["c"]
-        ctd.attrs["tau1"] = float(corrected.attrs["tau1"])
-        ctd.attrs["L1"] = float(corrected.attrs["L1"])
+        work = tc.phase_correct(ctd, N=tc_cfg.N, f0=tc_cfg.f0, tcfit=tc_cfg.tcfit)
+        ctd.attrs["tau1"] = float(work.attrs["tau1"])
+        ctd.attrs["L1"] = float(work.attrs["L1"])
         corrections.append(f"phase_correct(N={tc_cfg.N}, f0={tc_cfg.f0}, tcfit={tc_cfg.tcfit})")
+    else:
+        work = ctd
 
     if tc_cfg.thermal_mass:
-        corrected = tc.thermal_mass_correction(ctd, alpha=tc_cfg.alpha, beta=tc_cfg.beta)
-        ctd["c"] = corrected["c"]
+        work = tc.thermal_mass_correction(work, alpha=tc_cfg.alpha, beta=tc_cfg.beta)
         corrections.append(
             f"thermal_mass_correction(alpha={tc_cfg.alpha}, beta={tc_cfg.beta})"
         )
 
     if tc_cfg.viscous_heating:
-        dT = tc.viscous_heating_temperature_correction(ctd["dPdt"].values)
-        ctd["t"] = ctd["t"] - dT
-        corrections.append("viscous_heating_temperature_correction()")
+        dT = tc.viscous_heating_temperature_correction(
+            work["dPdt"].values, Pr=_VISCOUS_PR, scale=_VISCOUS_SCALE
+        )
+        work = work.assign(t=work["t"] - dT)
+        corrections.append(
+            f"viscous_heating_temperature_correction(Pr={_VISCOUS_PR}, "
+            f"scale={_VISCOUS_SCALE})"
+        )
+
+    if tc_cfg.phase_match:
+        work = work.reindex(time=original_time)
+
+    ctd["t"] = work["t"]
+    ctd["c"] = work["c"]
+    ctd["t"].attrs = t_attrs
+    ctd["c"].attrs = c_attrs
 
     ctd.attrs["corrections"] = "; ".join(corrections) if corrections else "none"
     return ctd
@@ -299,6 +344,17 @@ def make_l1(tree: xr.DataTree, config: FCTDConfig | None = None) -> xr.DataTree:
     ValueError
         Propagated from `_add_position` when there is no usable GPS fix
         and `config.latitude_fallback` is None.
+
+    Notes
+    -----
+    When positioning falls back to `config.latitude_fallback`
+    (`ctd.attrs["latitude_source"] == "fallback"`), `lon` is left all-NaN
+    rather than fabricated, since a fallback gives no real longitude. `SA`
+    (and everything downstream of it: `CT`, `sgth0`) needs a real position
+    and comes out all-NaN as a result; `SP` does not depend on position
+    and stays valid. This is intended, not a bug: `_add_position` stamps
+    the same explanation onto `ctd.attrs["latitude_source_note"]` for
+    anyone inspecting the product without having read this docstring.
     """
     if config is None:
         config = FCTDConfig()
