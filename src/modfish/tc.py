@@ -2,9 +2,35 @@
 T-C sensor response corrections for SBE49-carrying MOD profilers.
 
 Fish-agnostic: the sampling interval is read from the data and every
-rate- or fall-speed-dependent parameter is an explicit argument. Default
-parameter values are documented placeholders; choosing them is the
-subject of the T-C correction analysis (FCTD reprocessing sub-project 3).
+rate- or fall-speed-dependent parameter is an explicit argument. Running
+`correct` with every argument at its default is a no-op, so a cruise
+config opts into each step and no fitted value is buried in this module.
+The values fitted for FCTD1 (SBE49 serial 0537) on the 2025 MOTIVE cruise
+live in that cruise's config, with the analysis behind them in the
+`motive-cruise-proc` draft notebooks 04 to 06 and the write-up in that
+repo's book (`book/data/fctd_tc_correction.md`).
+
+`correct` applies the chain in a fixed order, each step skippable on its
+own: a zero-phase low-pass on `t` and `c` (`lowpassfilter`), the sensor
+response on `t` as a whole-record transfer function
+`H(f) = (1 + i 2 pi f tau_t) exp(i 2 pi f lag)` (`response_correction`),
+the Lueck and Picklo thermal-mass recursion on `c`
+(`thermal_mass_correction`), and an optional viscous-heating term on `t`
+(`viscous_heating_temperature_correction`). See `correct` for the full
+contract and the sign conventions.
+
+The estimators that fit those parameters live here too. `find_lags`
+cross-correlates differenced `t` and `c` in short windows and returns the
+apparent T-C lag per window with its mean pressure and fall rate.
+`phase_correct` fits the same transfer function per segment in the
+frequency domain and returns the T-C coherence along with it, which is
+what sets the low-pass cutoff. `lag_tau_cost_map` and
+`thermal_mass_cost_map` scan `(lag, tau_t)` and `(alpha, tau)` grids
+under one of three costs: `salinity_roughness`, the rms second difference
+of practical salinity; `downup_separation`, Morison's mean absolute
+salinity difference between consecutive down and up casts in temperature
+bins; and `rosette_rms`, the rms difference against a co-located
+shipboard rosette cast.
 
 Lineage: consolidated from gvpy.mod (which extended ctdproc's dual-sensor
 implementation to the single-sensor FCTD). ctdproc reference for the
