@@ -5,6 +5,12 @@ from pathlib import Path
 
 import yaml
 
+#: `tc` keys from before the T-C correction sub-project reshape (task 3);
+#: `FCTDConfig.from_dict` rejects them by name instead of falling through
+#: to the generic unknown-key error, so a stale cruise config fails loudly
+#: naming its replacement.
+_REMOVED_TC_KEYS = {"phase_match", "N", "f0", "tcfit"}
+
 
 @dataclasses.dataclass
 class CastParams:
@@ -30,43 +36,39 @@ class CastParams:
 
 @dataclasses.dataclass
 class TCParams:
-    """Temperature-conductivity correction parameters.
+    """Temperature-conductivity correction parameters for `tc.correct`.
+
+    Field names match `tc.correct`'s keyword arguments exactly; `_apply_tc`
+    calls `tc.correct(ctd, **dataclasses.asdict(config.tc))`.
 
     Parameters
     ----------
-    phase_match : bool
-        Enable phase-matching correction
-    N : int
-        samples, segment length (cruise-1 notebook: 2**7)
-    f0 : float
-        LP cutoff Hz (gvpy; orphaned modfish copy had 9)
-    tcfit : tuple[float, float] | None
-        dbar, upper/lower pressure limit for the phase fit. None: add_tcfit_default.
-        The pressure range is converted to the contiguous first-to-last
-        in-range sample index span, not a per-sample mask; on a multi-cast
-        deployment record that span runs from the first descent into the
-        range on the first cast to the last ascent out of it on the last
-        cast, so it effectively covers the whole record, surface soaks
-        included. Per-cast or masked-segment fitting is a FCTD reprocessing
-        sub-project 3 item.
+    lag : float
+        s, T advance (T lags C). SBE49 manual: 0.0625
+    tau_t : float
+        s, thermistor time constant; 0 disables
+    lowpass : float | None
+        Hz, zero-phase low-pass on t, c; None disables
     thermal_mass : bool
         Enable thermal mass correction
     alpha : float
-        dimensionless, thermal anomaly amplitude. SBE manual placeholder
+        dimensionless, thermal anomaly amplitude. SBE49 manual
     beta : float
-        1/s, inverse relaxation time constant. SBE manual placeholder
+        1/s, inverse relaxation time constant. SBE49 manual
     viscous_heating : bool
         derivation is for unpumped UCTD
+    pr : float
+        Prandtl number, Larson and Pedersen 1996 at 2 degC
     """
 
-    phase_match: bool = True
-    N: int = 128  # segment length (cruise-1 notebook: 2**7)
-    f0: float = 6.0  # LP cutoff Hz (gvpy; orphaned modfish copy had 9)
-    tcfit: tuple[float, float] | None = None  # None: add_tcfit_default
+    lag: float = 0.0  # s, T advance (T lags C). SBE49 manual: 0.0625
+    tau_t: float = 0.0  # s, thermistor time constant; 0 disables
+    lowpass: float | None = None  # Hz, zero-phase low-pass on t, c; None disables
     thermal_mass: bool = False
-    alpha: float = 0.03  # SBE manual placeholder
-    beta: float = 1 / 7  # SBE manual placeholder
+    alpha: float = 0.03  # SBE49 manual
+    beta: float = 1 / 7  # 1/s, SBE49 manual
     viscous_heating: bool = False  # derivation is for unpumped UCTD
+    pr: float = 12.4  # Prandtl number, Larson and Pedersen 1996 at 2 degC
 
 
 @dataclasses.dataclass
@@ -138,7 +140,9 @@ class FCTDConfig:
         ------
         ValueError
             If unknown keys are provided, if nested sections are not dicts,
-            or if a scalar (non-section) field is given a dict value.
+            if a scalar (non-section) field is given a dict value, or if
+            `tc` carries a key removed in the T-C correction sub-project
+            (`phase_match`, `N`, `f0`, `tcfit`).
         """
         # Mapping of nested section names to their dataclass types and field sets
         nested_sections = {
@@ -172,6 +176,14 @@ class FCTDConfig:
                     raise ValueError(
                         f"Expected {section_name} to be a dict, got {type(section_value).__name__}"
                     )
+
+                if section_name == "tc":
+                    for key in section_value:
+                        if key in _REMOVED_TC_KEYS:
+                            raise ValueError(
+                                f"tc.{key} was removed in the T-C correction "
+                                "sub-project; set lag, tau_t and lowpass instead"
+                            )
 
                 # Check for unknown keys in this section
                 unknown_keys = set(section_value.keys()) - field_names

@@ -6,18 +6,27 @@ from modfish.fctd.config import FCTDConfig
 def test_defaults_match_spec():
     cfg = FCTDConfig()
     assert cfg.casts.wlim == 0.4
-    assert cfg.tc.N == 128
-    assert cfg.tc.f0 == 6.0
+    assert cfg.tc.lag == 0.0
+    assert cfg.tc.tau_t == 0.0
+    assert cfg.tc.lowpass is None
+    assert cfg.tc.pr == 12.4
     assert cfg.tc.thermal_mass is False
     assert cfg.grid.dz == 0.5
     assert cfg.latitude_fallback is None
 
 
 def test_from_dict_partial_override():
-    cfg = FCTDConfig.from_dict({"tc": {"N": 512}, "latitude_fallback": 2.0})
-    assert cfg.tc.N == 512
-    assert cfg.tc.f0 == 6.0
+    cfg = FCTDConfig.from_dict({"tc": {"lag": 0.1}, "latitude_fallback": 2.0})
+    assert cfg.tc.lag == 0.1
+    assert cfg.tc.tau_t == 0.0
+    assert cfg.tc.lowpass is None
+    assert cfg.tc.pr == 12.4
     assert cfg.latitude_fallback == 2.0
+
+
+def test_from_dict_removed_tc_key_names_replacement():
+    with pytest.raises(ValueError, match="phase_match was removed"):
+        FCTDConfig.from_dict({"tc": {"phase_match": True}})
 
 
 def test_from_dict_unknown_key_raises():
