@@ -114,6 +114,17 @@ def test_read_root_attrs_carry_quality_tallies(tree):
     assert tree.attrs["vehicle"] == "FCTD1"
 
 
+def test_read_ctd_group_carries_serialnum(tree):
+    # header_setup fields (survey, experiment, cruise, vehicle, fishflag,
+    # serialnum, gm_time) were stamped only onto the DataTree root's attrs,
+    # not onto the ctd group's own attrs (which got only the SBE49
+    # calibration coefficients); a consumer opening the ctd group alone,
+    # as the L0 pipeline does, never saw serialnum (notebook 04, real 2025
+    # data). header_setup itself parses the field correctly; this pins the
+    # ctd group carrying it too.
+    assert tree["ctd"].attrs["serialnum"] == "0537"
+
+
 def test_read_laptop_time_diagnostics_present(tree):
     assert tree.ds.sizes["block"] == tree.attrs["n_frames"]
     assert tree.ds.block_tag.values[0] in ("SOM3", "DCAL", "SB49", "EFE4", "ECOP", "ALTI")

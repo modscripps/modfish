@@ -5,7 +5,13 @@
 import pytest
 
 from modfish.modraw.framer import frame
-from modfish.modraw.header import parse_dcal, parse_som3, read_header, sbe49_cal
+from modfish.modraw.header import (
+    header_setup,
+    parse_dcal,
+    parse_som3,
+    read_header,
+    sbe49_cal,
+)
 
 
 @pytest.fixture
@@ -65,3 +71,16 @@ def test_parse_dcal_all_coefficients_present(fixture_packets):
     assert cal["ptempa0"] == pytest.approx(-8.653358e01)
     assert cal["ptempa1"] == pytest.approx(4.111889e01)
     assert cal["ptempa2"] == pytest.approx(1.235626)
+
+
+def test_header_setup_2025_format_serialnum():
+    # Exact line copied from FCTD25_12_08_133647.modraw (skq202521s cruise,
+    # server mount /mnt/mod-server/MOTIVE/Cruises/skq202521s/05_processed_data
+    # /25_1208_d08_motiveb/raw/), the 2025 header format notebook 04 found
+    # serialnum missing for downstream. header_setup itself matches this
+    # line correctly (single-quoted, no space before `=`); the L0 defect is
+    # in reader.read() not stamping header_setup fields onto the ctd group's
+    # own attrs, fixed separately and covered in test_modraw_reader.py.
+    head = "CTD.SerialNum='0537'\n"
+    setup = header_setup(head)
+    assert setup["serialnum"] == "0537"
