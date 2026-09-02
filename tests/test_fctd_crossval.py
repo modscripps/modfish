@@ -17,9 +17,10 @@ validation" section asks for. Skips unless the mod server is mounted.
 Runtime, measured on samoan 2026-09-01: the 2024 fixture converts 256
 `.modraw` files (1.2 GB) in 579 s and runs `process_deployment` in 22 s; the
 2025 fixture converts 690 files (3.2 GB) in 1499 s and runs the stage chain
-in 84 s. About 36 minutes for the module. `slow` tests are not deselected by
-default in `pyproject.toml`, so a plain `uv run pytest tests/` pays that
-cost.
+in 84 s. About 36 minutes for the module. `pyproject.toml` sets
+`addopts = ["-m", "not slow"]`, so `slow` tests are deselected by default; a
+plain `uv run pytest tests/` skips this module, and running it requires
+`uv run pytest -m slow` explicitly.
 
 Comparison contract (task brief): corrections off (`phase_match=False`,
 `thermal_mass=False`), `latitude_fallback=30.0` (a no-op on both, each

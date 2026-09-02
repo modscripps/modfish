@@ -317,8 +317,9 @@ uv run pytest tests/test_fctd_crossval.py -q -m slow
 
 One module fixture per deployment, each converting its raw files and running the pipeline
 once. About 36 minutes together: 10 min for d11 (256 files, 1.2 GB) and 26 min for d07 (690
-files, 3.2 GB). `slow` is registered in `pyproject.toml` but not deselected by default, so
-a plain `uv run pytest tests/` pays that cost too.
+files, 3.2 GB). `pyproject.toml` sets `addopts = ["-m", "not slow"]`, so `slow` is
+deselected by default and a plain `uv run pytest tests/` skips this module; the command
+above (`-m slow`) is required to run it.
 
 Intermediates run to about 3.7 GB for d11 (1.9 GB of L0 netCDF, 1.8 GB of L1) and 4.8 GB
 for d07. pytest keeps the last three numbered tmp roots, which on samoan (`/tmp` is a 16 GB
@@ -341,3 +342,12 @@ Peak resident memory during the d07 `concat_l0` was about 16 GB.
   2025 salinities, needs to know. Worth reporting upstream.
 - Whether the 2024 gridder's legacy gain and phase correction is the right target for our
   `phase_correct` parameters is sub-project 3.
+- Sub-project 3: `tcfit`'s pressure range is converted to a contiguous index span, not a
+  per-sample mask, so on a deployment record with multiple casts the fit effectively sees
+  the whole record, surface soaks included. Per-cast or masked-segment fitting is worth
+  evaluating. The resolved `tcfit` (the range actually used, not the unresolved `None` when
+  the default kicked in) is now stamped onto `ctd.attrs["tcfit"]` and into the
+  `corrections` string, so this is at least visible in the product.
+- Sub-project 5: `concat_l0` peak memory is about 16 GB, measured on the d07 fixture (see
+  "Reproducing" above). Concatenating group-at-a-time instead of loading every file's
+  groups before concatenating would roughly halve that.
