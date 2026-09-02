@@ -343,7 +343,9 @@ def make_l1(tree: xr.DataTree, config: FCTDConfig | None = None) -> xr.DataTree:
     ------
     ValueError
         Propagated from `_add_position` when there is no usable GPS fix
-        and `config.latitude_fallback` is None.
+        and `config.latitude_fallback` is None. Also raised directly when
+        `find_casts` detects zero casts in the record, naming the sample
+        count and `config.casts`.
 
     Notes
     -----
@@ -371,6 +373,11 @@ def make_l1(tree: xr.DataTree, config: FCTDConfig | None = None) -> xr.DataTree:
     ctd = _add_dpdt(ctd, config)
 
     casts_df = find_casts(ctd["p"].values, ctd["time"].values, config.casts)
+    if len(casts_df) == 0:
+        raise ValueError(
+            f"no casts detected in record of {ctd.sizes['time']} samples "
+            f"(cast params: {config.casts})"
+        )
     ctd = label_casts(ctd, casts_df)
     if efe is not None:
         efe = label_casts(efe, casts_df, time_ref=ctd["time"].values)

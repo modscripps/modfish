@@ -151,6 +151,13 @@ def test_l1_casts_group_matches_labels(l0_tree):
         assert labeled_time.max() <= end
 
 
+def test_l1_no_casts_raises(tmp_path):
+    files = write_l0_files(tmp_path, n_files=1, minutes=12.0)  # default flat 5-dbar p_fn: no casts
+    tree = concat_l0(files)
+    with pytest.raises(ValueError, match="no casts detected"):
+        make_l1(tree, FCTDConfig(tc=TCParams(phase_match=False)))
+
+
 def test_l1_no_gps_no_fallback_raises(tmp_path):
     files = write_l0_files(tmp_path, n_files=1, with_gps=False, p_fn=two_cast_p, minutes=12.0)
     tree = concat_l0(files)
