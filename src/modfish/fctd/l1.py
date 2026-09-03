@@ -25,7 +25,8 @@ import xarray as xr
 from scipy.ndimage import uniform_filter1d
 
 from modfish import tc
-from modfish.fctd.casts import _sampling_rate, casts_to_dataset, find_casts, label_casts
+from modfish.fctd.casts import casts_to_dataset, find_casts, label_casts
+from modfish.utils import sampling_interval
 from modfish.fctd.config import FCTDConfig
 
 logger = logging.getLogger(__name__)
@@ -188,7 +189,7 @@ def _add_dpdt(ctd: xr.Dataset, config: FCTDConfig) -> xr.Dataset:
     xr.Dataset
         `ctd` with `dPdt` added.
     """
-    fs = _sampling_rate(ctd["time"].values)
+    fs = 1.0 / sampling_interval(ctd["time"].values)
     dpdt = np.gradient(ctd["p"].values) * fs
     window = max(round(config.dpdt_smooth * fs), 1)
     dpdt = uniform_filter1d(dpdt, window, mode="nearest")

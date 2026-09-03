@@ -14,25 +14,9 @@ from scipy.ndimage import uniform_filter1d
 from scipy.signal import medfilt
 
 from modfish.fctd.config import CastParams
+from modfish.utils import sampling_interval
 
 logger = logging.getLogger(__name__)
-
-
-def _sampling_rate(time: np.ndarray) -> float:
-    """Median sampling rate of a time array.
-
-    Parameters
-    ----------
-    time : np.ndarray
-        Timestamps, dtype datetime64.
-
-    Returns
-    -------
-    float
-        Sampling rate in Hz, from the median time step.
-    """
-    dt = np.diff(time) / np.timedelta64(1, "s")
-    return 1.0 / np.median(dt)
 
 
 def _odd_window(seconds: float, fs: float, n_max: int) -> int:
@@ -125,7 +109,7 @@ def find_casts(
     p = np.asarray(p, dtype=float)
     n_samples = p.size
 
-    fs = _sampling_rate(time)
+    fs = 1.0 / sampling_interval(time)
     n_window = _odd_window(params.smooth, fs, n_samples)
 
     p_med = medfilt(p, n_window)

@@ -9,6 +9,55 @@ import scipy
 from munch import munchify
 
 
+def sampling_interval(time) -> float:
+    """Mean sampling interval of a time axis over its gap-free stretches.
+
+    Parameters
+    ----------
+    time : array_like
+        Timestamps, dtype datetime64, at least two of them.
+
+    Returns
+    -------
+    float
+        Sampling interval in seconds. The sampling rate is its inverse.
+
+    Raises
+    ------
+    ValueError
+        If `time` has fewer than two samples, or no step lies within the
+        regular range described below.
+
+    Notes
+    -----
+    Timestamps quantized to 1 ms make a 62.5 ms step (16 Hz, the FCTD's
+    SBE49) alternate between 62 and 63 ms, so the median step reads 63 ms
+    and a rate taken from it is 0.8 % low. The mean of the regular steps
+    reads 62.5 ms. Steps outside 0.5 to 1.5 times the median step are
+    left out of the mean: time gaps and duplicate or backward stamps in a
+    concatenated record then perturb at most the samples next to them,
+    never the interval. Every function in `modfish.tc` and the cast
+    detection in `modfish.fctd` take their rate from here so that fitted
+    time constants and applied ones share one convention
+    (modscripps/modfish#20).
+
+    Examples
+    --------
+    >>> t = np.datetime64("2025-12-06") + np.round(np.arange(1601) / 16 * 1000).astype("timedelta64[ms]")
+    >>> sampling_interval(t)
+    0.0625
+    """
+    time = np.asarray(time)
+    if time.size < 2:
+        raise ValueError("need at least two samples to estimate a sampling interval")
+    dt = np.diff(time) / np.timedelta64(1, "s")
+    dt_med = np.median(dt)
+    regular = (dt > 0.5 * dt_med) & (dt < 1.5 * dt_med)
+    if not regular.any():
+        raise ValueError("no regular time step found; is the time axis monotonic?")
+    return float(dt[regular].mean())
+
+
 def mattime_to_datetime64(dnum):
     """Convert Matlab datenum time format to numpy's datetime64 format.
 
