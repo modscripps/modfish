@@ -55,6 +55,13 @@
     written to the DataTree root only, so a consumer that opens the
     `ctd` group on its own, as the L0 pipeline does, never saw
     `serialnum`, `vehicle`, `cruise` or `gm_time`.
+-   `modraw.read` converts a 5 MB MOTIVE `.modraw` file in about 0.3 s,
+    down from about 7 s. `decode_sb49` and `decode_ecop` now stack the
+    records of a whole stream and decode each hexadecimal field once,
+    through a byte-to-digit lookup table, where they used to decode
+    every block on its own (44,000 numpy calls on arrays of a few rows
+    per file). Output is bit-identical, checked on files from both
+    MOTIVE cruises.
 
 ### Documentation
 -   Documented the `modfish.modraw` subpackage in its module docstring

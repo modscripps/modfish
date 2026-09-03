@@ -21,8 +21,21 @@ from .header import header_setup, read_body, read_header, sbe49_cal
 _REC_LEN = 40
 
 
+#: Byte value to hexadecimal digit value, -1 for anything that is not one of
+#: `0-9`, `A-F`, `a-f`.
+_HEX_DIGIT = np.full(256, -1, dtype=np.int64)
+_HEX_DIGIT[48:58] = np.arange(10)  # 0-9
+_HEX_DIGIT[65:71] = np.arange(10, 16)  # A-F
+_HEX_DIGIT[97:103] = np.arange(10, 16)  # a-f
+
+
 def _hex_columns(chars, i0, i1):
     """Decode columns `i0:i1` of a character array as hexadecimal integers.
+
+    Vectorized over rows. Call it once per field on the stacked records of
+    a whole stream: called per block on a few rows at a time, numpy call
+    overhead dominated the conversion of a file (about 7 s of a 9 s
+    profile, modscripps/modfish#18).
 
     Parameters
     ----------
@@ -34,19 +47,17 @@ def _hex_columns(chars, i0, i1):
     Returns
     -------
     out : np.ndarray
-        Decoded values, NaN where a character was not hexadecimal.
+        Decoded values as float64, NaN where a character was not
+        hexadecimal. Accumulated most significant digit first in float64,
+        so any value below 2**53 (every 16-digit millisecond timestamp
+        included) is exact.
     """
-    sub = chars[:, i0:i1]
-    out = np.zeros(sub.shape[0], dtype=float)
-    ok = np.ones(sub.shape[0], dtype=bool)
-    for j in range(sub.shape[1]):
-        col = sub[:, j]
-        digit = np.full(col.shape, -1, dtype=np.int64)
-        digit = np.where((col >= 48) & (col <= 57), col - 48, digit)  # 0-9
-        digit = np.where((col >= 65) & (col <= 70), col - 55, digit)  # A-F
-        digit = np.where((col >= 97) & (col <= 102), col - 87, digit)  # a-f
-        ok &= digit >= 0
-        out = out * 16 + np.where(digit >= 0, digit, 0)
+    digit = _HEX_DIGIT[chars[:, i0:i1]]
+    ok = (digit >= 0).all(axis=1)
+    digit = np.where(digit >= 0, digit, 0)
+    out = np.zeros(digit.shape[0], dtype=float)
+    for j in range(digit.shape[1]):
+        out = out * 16 + digit[:, j]
     out[~ok] = np.nan
     return out
 
@@ -132,29 +143,25 @@ def decode_sb49(packets: list[Packet], cal: dict) -> xr.Dataset:
         looks like uptime rather than epoch milliseconds (not yet supported).
     """
     n_bad_length = 0
-    ts, t_raw, c_raw, p_raw, pt_raw = [], [], [], [], []
+    payloads = []
     for packet in packets:
         data = packet.payload
         if len(data) % _REC_LEN != 0:
             n_bad_length += 1
             continue
-        chars = np.frombuffer(data, dtype=np.uint8).reshape(
-            len(data) // _REC_LEN, _REC_LEN
-        )
-        ts.append(_hex_columns(chars, 0, 16))
-        t_raw.append(_hex_columns(chars, 16, 22))
-        c_raw.append(_hex_columns(chars, 22, 28))
-        p_raw.append(_hex_columns(chars, 28, 34))
-        pt_raw.append(_hex_columns(chars, 34, 38))
+        payloads.append(data)
 
-    if not ts:
+    if not payloads:
         raise ValueError("no usable SB49 blocks")
 
-    ts = np.concatenate(ts)
-    t_raw = np.concatenate(t_raw)
-    c_raw = np.concatenate(c_raw)
-    p_raw = np.concatenate(p_raw)
-    pt_raw = np.concatenate(pt_raw)
+    # Stack every record of the stream first and decode each field once;
+    # see `_hex_columns` for why.
+    chars = np.frombuffer(b"".join(payloads), dtype=np.uint8).reshape(-1, _REC_LEN)
+    ts = _hex_columns(chars, 0, 16)
+    t_raw = _hex_columns(chars, 16, 22)
+    c_raw = _hex_columns(chars, 22, 28)
+    p_raw = _hex_columns(chars, 28, 34)
+    pt_raw = _hex_columns(chars, 34, 38)
     t, c, p = sbe49_to_physical(t_raw, c_raw, p_raw, pt_raw, cal)
 
     # The Matlab reader treats a median timestamp above 1e9 as milliseconds

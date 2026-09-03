@@ -70,28 +70,24 @@ def decode_ecop(packets: list[Packet]) -> xr.Dataset:
     so these quantities are instrument-relative and lack physical calibration.
     """
     n_bad_length = 0
-    ts, bb_raw, chla_raw, fdom_raw = [], [], [], []
-
+    payloads = []
     for packet in packets:
         data = packet.payload
         if len(data) != _REC_LEN:
             n_bad_length += 1
             continue
+        payloads.append(data)
 
-        # Stack this 28-character record as a (1, 28) row of uint8
-        chars = np.frombuffer(data, dtype=np.uint8).reshape(1, _REC_LEN)
-        ts.append(_hex_columns(chars, 0, 16))
-        bb_raw.append(_hex_columns(chars, 16, 20))
-        chla_raw.append(_hex_columns(chars, 20, 24))
-        fdom_raw.append(_hex_columns(chars, 24, 28))
-
-    if not ts:
+    if not payloads:
         raise ValueError("no usable ECOP blocks")
 
-    ts = np.concatenate(ts)
-    bb_raw = np.concatenate(bb_raw)
-    chla_raw = np.concatenate(chla_raw)
-    fdom_raw = np.concatenate(fdom_raw)
+    # Stack every record of the stream first and decode each field once;
+    # see `sb49._hex_columns` for why.
+    chars = np.frombuffer(b"".join(payloads), dtype=np.uint8).reshape(-1, _REC_LEN)
+    ts = _hex_columns(chars, 0, 16)
+    bb_raw = _hex_columns(chars, 16, 20)
+    chla_raw = _hex_columns(chars, 20, 24)
+    fdom_raw = _hex_columns(chars, 24, 28)
 
     # Convert timestamp to datetime64[ns]. NaN timestamps produce NaT.
     time = pd.to_datetime(ts, unit="ms").values.astype("datetime64[ns]")
