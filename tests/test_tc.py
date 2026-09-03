@@ -712,7 +712,7 @@ def make_gapped_pair(minutes=20, gap_start_s=600.0, gap_s=200.0, jump=5.0):
     return full, full.isel(time=kept), kept
 
 
-def test_correct_gap_free_record_is_bit_identical():
+def test_correct_gap_free_record_keeps_its_time_axis():
     ds = make_synthetic_ctd(minutes=5)
     kw = dict(lag=0.03, tau_t=0.05, lowpass=5.0, thermal_mass=True, alpha=0.01, beta=1 / 12)
     out = tc.correct(ds, **kw)
