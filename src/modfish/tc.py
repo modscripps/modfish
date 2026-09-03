@@ -152,8 +152,9 @@ def _uniform_slots(time: np.ndarray) -> tuple[np.ndarray, int, float]:
     sit on a uniform grid even though every step of the correction chain
     treats them as if they did. This walks the record sample by sample and
     advances one slot per regular step, `round(step / dt)` slots per step
-    longer than 1.5 `dt`. A gap therefore opens the slots it is missing
-    and every other sample keeps the position it already had.
+    that reaches 1.5 times the median step. A gap therefore opens the
+    slots it is missing and every other sample keeps the position it
+    already had.
 
     Parameters
     ----------
@@ -181,9 +182,15 @@ def _uniform_slots(time: np.ndarray) -> tuple[np.ndarray, int, float]:
 
     Notes
     -----
-    The 1.5 `dt` threshold is the upper end of the range
-    `modfish.utils.sampling_interval` calls a regular step, so a step it
-    counts towards the interval takes one slot here.
+    A gap is detected against the median step, the same rule
+    `modfish.utils.sampling_interval` uses to decide which steps go into
+    its mean, so every step it counts towards the interval takes exactly
+    one slot here. The returned `dt` is that mean and sets only how many
+    slots a gap spans. The two differ by 0.8 % on the FCTD's 1 ms-quantized
+    16 Hz stamps, where the median step reads 63 ms against a 62.5 ms
+    mean, enough for a 94 ms step to be a regular step for the interval
+    and a gap for a threshold taken off the mean. A step shorter than half
+    the median takes one slot as well; only a step of zero or less raises.
 
     Accumulating slots along the steps, in place of rounding each sample's
     offset from `time[0]` onto one global grid, is what keeps the mapping
@@ -205,7 +212,8 @@ def _uniform_slots(time: np.ndarray) -> tuple[np.ndarray, int, float]:
             "two samples would fall in the same slot of the uniform time "
             "grid, or out of order"
         )
-    advance = np.where(step > 1.5 * dt, np.round(step / dt), 1.0).astype("int64")
+    gap = step >= 1.5 * np.median(step)
+    advance = np.where(gap, np.round(step / dt), 1.0).astype("int64")
     slots = np.concatenate(([0], np.cumsum(advance)))
     return slots, int(slots[-1]) + 1, dt
 
@@ -247,8 +255,7 @@ def _on_uniform_grid(ds: xr.Dataset, variables: tuple[str, ...], fn) -> xr.Datas
     The uniform axis is built from integer nanoseconds so that no float
     rounding drifts along a multi-million-sample record. Slot 0 and the
     last slot hold original samples by construction, so the inserted NaN
-    are always interior and `_fill_gaps` interpolates rather than
-    extrapolates across them.
+    are always interior and the fill across them is an interpolation.
     """
     slots, n_slots, dt = _uniform_slots(ds.time.data)
     if n_slots == ds.sizes["time"]:
@@ -845,7 +852,10 @@ def response_correction(
     Raises
     ------
     ValueError
-        If `lag` is negative.
+        If `lag` is negative, or, when the correction runs at all (`lag`
+        or `tau_t` nonzero), if `ds.time` has a step of zero or less,
+        which `_uniform_slots` refuses because two samples would fall in
+        the same slot of the uniform grid.
 
     Notes
     -----
@@ -966,6 +976,14 @@ def thermal_mass_correction(
         do not propagate into `c`: both `t` and `c` are gap-filled for the
         recursion, and the interior-NaN mask captured from the input `c`
         is restored on the output.
+
+    Raises
+    ------
+    ValueError
+        If `alpha` is not positive, if `dcdt` is neither `"sbe"` nor
+        `"constant"`, or if `ds.time` has a step of zero or less, which
+        `_uniform_slots` refuses because two samples would fall in the
+        same slot of the uniform grid.
 
     Notes
     -----
@@ -1691,12 +1709,21 @@ def correct(
         whole chain with every parameter used, in the sub-project 2
         style (`"none"` if nothing was applied).
 
+    Raises
+    ------
+    ValueError
+        If `ds.time` has a step of zero or less, which `_uniform_slots`
+        refuses because two samples would fall in the same slot of the
+        uniform grid. This is checked before any step runs, so it is
+        raised even with every argument at its default.
+
     Notes
     -----
     With every argument at its default, this function returns an
-    unmodified copy of `ds`: `t`, `c`, `p` and `dPdt` are byte-for-byte
-    identical to the input, and both `processing` attrs and
-    `attrs["corrections"]` read `"none"`.
+    unmodified copy of `ds`, provided the time axis is strictly
+    increasing: `t`, `c`, `p` and `dPdt` are byte-for-byte identical to
+    the input, and both `processing` attrs and `attrs["corrections"]`
+    read `"none"`.
 
     The whole chain runs on the record laid out on a uniform time grid at
     its own sampling interval (`_on_uniform_grid`), and the result comes

@@ -732,7 +732,7 @@ def test_correct_gapped_record_matches_full_record_away_from_the_gap():
     assert np.array_equal(out.time.data, gapped.time.data)
     # exclude 60 s on either side of the gap: the ramp the fill draws across
     # the gap is not the true signal, so the recursion's state differs there.
-    # 60 s is four thermal-mass relaxation times at beta = 1/12, which is what
+    # 60 s is five thermal-mass relaxation times at beta = 1/12, which is what
     # it takes for that state difference to fall under the 1e-5 tolerance
     # (3.8e-5 at 30 s, 3.1e-6 at 60 s).
     fs = 16.0
@@ -815,3 +815,29 @@ def test_uniform_slots_opens_only_the_missing_slots_at_a_gap():
     assert n_slots == ds.sizes["time"]
     assert np.array_equal(slots, np.flatnonzero(kept))
     assert dt == pytest.approx(1 / fs)
+
+
+def test_uniform_slots_counts_a_gap_against_the_median_step():
+    """The gap threshold is the one `sampling_interval` calls a regular step.
+
+    On the FCTD's 1 ms-quantized 16 Hz stamps the median step reads 63 ms
+    against a 62.5 ms mean, so a 94 ms step is regular for the interval
+    estimate (under 1.5 times the median, 94.5 ms) while a threshold taken
+    off the mean (1.5 times 62.5 ms, 93.75 ms) would call it a gap and open a
+    second slot. The two rules have to agree, or a record grows slots the
+    interval estimate says are not missing.
+    """
+    n = 2000
+    step_ms = np.diff(np.round(np.arange(n) / 16 * 1000))
+    step_ms[n // 2] = 94.0
+    time = np.datetime64("2024-11-20") + np.concatenate(
+        ([0.0], np.cumsum(step_ms))
+    ).astype("timedelta64[ms]")
+
+    assert np.median(step_ms) == 63.0  # the premise: median 63, mean 62.5
+    slots, n_slots, dt = tc._uniform_slots(time)
+    # the 94 ms step counts towards the mean interval, as it does in
+    # `sampling_interval`, which pulls dt 0.03 % above 62.5 ms
+    assert dt == pytest.approx(0.0625, abs=1e-4)
+    assert n_slots == n
+    assert np.array_equal(slots, np.arange(n))
