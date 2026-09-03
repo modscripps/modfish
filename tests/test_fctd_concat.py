@@ -57,3 +57,25 @@ def test_concat_preserves_variable_and_group_attrs(tmp_path):
     assert ctd.t.attrs["long_name"] == "temperature"
     assert ctd.c.attrs["units"] == "S/m"
     assert ctd.attrs["ta0"] == FAKE_CAL_TA0
+
+
+def test_concat_groups_loads_only_the_requested_groups(tmp_path):
+    files = write_l0_files(tmp_path, n_files=2, minutes=1.0, with_efe=True, with_gps=True)
+    full = concat_l0(files)
+    tree = concat_l0(files, groups=("ctd", "gps"))
+    assert set(tree.children) == {"ctd", "gps"}
+    xr.testing.assert_identical(tree["ctd"].to_dataset(), full["ctd"].to_dataset())
+    assert tree.attrs["groups"] == ["ctd", "gps"]
+    assert full.attrs["groups"] == "all"
+
+
+def test_concat_groups_missing_in_a_file_is_tolerated(tmp_path):
+    files = write_l0_files(tmp_path, n_files=2, minutes=1.0, with_gps=False)
+    tree = concat_l0(files, groups=("ctd", "gps"))
+    assert set(tree.children) == {"ctd"}
+
+
+def test_concat_groups_without_ctd_raises(tmp_path):
+    files = write_l0_files(tmp_path, n_files=1, minutes=1.0)
+    with pytest.raises(ValueError, match="ctd"):
+        concat_l0(files, groups=("gps",))

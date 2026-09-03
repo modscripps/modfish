@@ -23,7 +23,7 @@ _OVERLAP_WARN_S = 5.0
 _GAP_WARN_S = 60.0
 
 
-def _load_groups(path: Path) -> dict:
+def _load_groups(path: Path, groups=None) -> dict:
     """Open one file's L0 DataTree, load its groups into memory, and close it.
 
     Loading eagerly and closing immediately keeps at most one file handle
@@ -35,6 +35,9 @@ def _load_groups(path: Path) -> dict:
     ----------
     path : Path
         Per-file L0 netCDF path.
+    groups : iterable of str or None, optional
+        Group names to load. None (default) loads every child group. A
+        name absent from this file is skipped without error.
 
     Returns
     -------
@@ -43,8 +46,13 @@ def _load_groups(path: Path) -> dict:
         forensics, dim `block`) is excluded: it is never a child of itself
         in `tree.children`.
     """
+    wanted = None if groups is None else set(groups)
     with xr.open_datatree(path) as tree:
-        return {name: node.ds.load() for name, node in tree.children.items()}
+        return {
+            name: node.ds.load()
+            for name, node in tree.children.items()
+            if wanted is None or name in wanted
+        }
 
 
 def _time_range(groups: dict):
@@ -74,7 +82,7 @@ def _time_range(groups: dict):
     return all_t.min(), all_t.max()
 
 
-def concat_l0(files: list, keep_counts: bool = False) -> xr.DataTree:
+def concat_l0(files: list, keep_counts: bool = False, groups=None) -> xr.DataTree:
     """Concatenate per-file L0 DataTrees into one deployment-level DataTree.
 
     Parameters
@@ -87,6 +95,12 @@ def concat_l0(files: list, keep_counts: bool = False) -> xr.DataTree:
         Keep the raw-counts variables (`t_raw`, `c_raw`, `p_raw`, `pt_raw`,
         `bb_raw`, `chla_raw`, `fdom_raw`) in the `ctd` and `ecop` groups.
         Default False (drop them).
+    groups : iterable of str or None, optional
+        L0 group names to load and concatenate, e.g. ``("ctd", "gps")``.
+        None (default) loads every group present. `ctd` must be among the
+        selection, or nothing survives and `ValueError` is raised. Selecting
+        groups is how a deployment whose `efe` stream would not fit in
+        memory is processed for its CTD product alone.
 
     Returns
     -------
@@ -101,6 +115,8 @@ def concat_l0(files: list, keep_counts: bool = False) -> xr.DataTree:
         first among the parts handed to `xr.concat` for that group.
 
         Root attrs: `files` (input basenames, in the order given), `n_files`.
+        Root attrs also carry `groups`: the selection as a list, or the
+        string ``"all"`` when none was given.
         Each group dataset's own attrs carry `n_bad_length`, summed across
         the files that contributed to it, where at least one of them
         carried that attr (this overwrites whichever single file's count
@@ -126,11 +142,11 @@ def concat_l0(files: list, keep_counts: bool = False) -> xr.DataTree:
     if not files:
         raise ValueError("concat_l0: no files given")
 
-    per_file_groups = [_load_groups(f) for f in files]
+    per_file_groups = [_load_groups(f, groups) for f in files]
 
     group_names = []
-    for groups in per_file_groups:
-        for name in groups:
+    for file_groups in per_file_groups:
+        for name in file_groups:
             if name not in group_names:
                 group_names.append(name)
 
@@ -184,5 +200,6 @@ def concat_l0(files: list, keep_counts: bool = False) -> xr.DataTree:
     tree.attrs = dict(
         files=[f.name for f in files],
         n_files=len(files),
+        groups="all" if groups is None else list(groups),
     )
     return tree
