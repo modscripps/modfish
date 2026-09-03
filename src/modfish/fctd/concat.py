@@ -142,6 +142,7 @@ def concat_l0(files: list, keep_counts: bool = False, groups=None) -> xr.DataTre
     if not files:
         raise ValueError("concat_l0: no files given")
 
+    groups = None if groups is None else list(groups)
     per_file_groups = [_load_groups(f, groups) for f in files]
 
     group_names = []

@@ -79,3 +79,10 @@ def test_concat_groups_without_ctd_raises(tmp_path):
     files = write_l0_files(tmp_path, n_files=1, minutes=1.0)
     with pytest.raises(ValueError, match="ctd"):
         concat_l0(files, groups=("gps",))
+
+
+def test_concat_groups_accepts_a_one_shot_generator(tmp_path):
+    files = write_l0_files(tmp_path, n_files=2, minutes=1.0, with_gps=True)
+    tree = concat_l0(files, groups=(g for g in ("ctd", "gps")))
+    assert set(tree.children) == {"ctd", "gps"}
+    assert tree.attrs["groups"] == ["ctd", "gps"]
