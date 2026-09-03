@@ -84,3 +84,26 @@ def test_header_setup_2025_format_serialnum():
     head = "CTD.SerialNum='0537'\n"
     setup = header_setup(head)
     assert setup["serialnum"] == "0537"
+
+
+def test_header_setup_skips_commented_enumeration_lines():
+    # 2024 (MOTIVE24, skq202417s) headers carry a commented enumeration of
+    # candidate serial numbers ahead of the active assignment, e.g. excerpt
+    # from EPSI24_11_20_135258.modraw. re.search used to return the first
+    # match, the commented mako1 line, stamping every 2024 file '0537'
+    # regardless of which instrument it came from.
+    head = (
+        "CTD.vehicle='FCTD2'\n"
+        "% ---- vehicle pressure case  (epsimako)\n"
+        "CTD.fish_pc='PC2'\n"
+        "% ---- CTD.fishflag EPSI or FCTD\n"
+        "CTD.fishflag='FCTD'\n"
+        "% ----> mako1 CTD.SerialNum='0537'\n"
+        "% ----> mako4 CTD.SerialNum='0237'\n"
+        "% ----> FCTD1 CTD.SerialNum='0674'\n"
+        "% ----> FCTD2 CTD.SerialNum='0387'\n"
+        "CTD.SerialNum='0387'\n"
+    )
+    setup = header_setup(head)
+    assert setup["serialnum"] == "0387"
+    assert setup["vehicle"] == "FCTD2"

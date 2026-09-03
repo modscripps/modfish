@@ -12,7 +12,7 @@ observed from `modfish.modraw.read()` on the fixture, run 2026-09-01:
     n_blocks_DCAL=1, n_blocks_SOM3=1, n_blocks_SB49=277,
     n_blocks_ECOP=1049, n_blocks_VNAV=138, n_blocks_EFE4=141
     survey='24_1125_d18_fctd_longsectE', experiment='MOTIVE24',
-    cruise='MOTIVE', vehicle='FCTD2', fishflag='FCTD', serialnum='0537',
+    cruise='MOTIVE', vehicle='FCTD2', fishflag='FCTD', serialnum='0387',
     gm_time='11/26/2024 10:29:23'
 
 n_resync (75) accounts exactly for the interleaved ASCII sentences the
