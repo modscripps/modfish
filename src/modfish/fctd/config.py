@@ -110,6 +110,10 @@ class FCTDConfig:
         s, dPdt smoothing window
     keep_counts : bool
         keep *_raw count variables through concat
+    groups : tuple of str or None
+        L0 group names `concat_l0` loads; None loads every group. Set to
+        ``("ctd", "gps")`` to build the CTD product without the `efe`
+        stream, which dominates memory.
     """
 
     casts: CastParams = dataclasses.field(default_factory=CastParams)
@@ -119,6 +123,11 @@ class FCTDConfig:
     gps_max_gap: float = 300.0  # s, max GPS gap to interpolate across
     dpdt_smooth: float = 1.0  # s, dPdt smoothing window
     keep_counts: bool = False  # keep *_raw count variables through concat
+    groups: tuple[str, ...] | None = None  # L0 groups concat_l0 loads; None = all
+
+    def __post_init__(self):
+        if self.groups is not None:
+            self.groups = tuple(str(g) for g in self.groups)
 
     @classmethod
     def from_dict(cls, d: dict) -> "FCTDConfig":

@@ -57,3 +57,12 @@ def test_from_dict_scalar_field_given_dict_raises():
     # would leave the default in place).
     with pytest.raises(ValueError, match="latitude_fallback"):
         FCTDConfig.from_dict({"latitude_fallback": {"oops": 1}})
+
+
+def test_from_dict_groups_list_becomes_tuple():
+    cfg = FCTDConfig.from_dict({"groups": ["ctd", "gps"]})
+    assert cfg.groups == ("ctd", "gps")
+
+
+def test_groups_default_is_none():
+    assert FCTDConfig().groups is None

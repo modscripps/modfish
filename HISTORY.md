@@ -39,6 +39,11 @@
     no longer depends on it. `io.add_n2` computes `n2` again, so
     `load_fctd_grid` and `load_epsi_grid` carry it as they did before
     the gvpy dependency was cut.
+-   `concat_l0` and `FCTDConfig` take a `groups` selection of the L0
+    groups to load, e.g. `("ctd", "gps")`, so a deployment whose `efe`
+    stream would not fit in memory can be processed for its CTD product
+    alone. The L1 root attrs record the selection. Default unchanged:
+    every group is loaded.
 
 ### Bug fixes
 -   The sampling rate every `modfish.tc` function derives from the time

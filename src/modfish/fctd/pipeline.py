@@ -40,7 +40,8 @@ def process_deployment(
         Deployment name, used to build the output filenames and, on
         failure, named in the wrapped error message.
     config : FCTDConfig or None, optional
-        Pipeline configuration. Defaults to `FCTDConfig()`.
+        Pipeline configuration. Defaults to `FCTDConfig()`. `config.groups`
+        selects which L0 groups `concat_l0` loads.
     overwrite : bool, optional
         When False (default) and both output files already exist,
         processing is skipped and the existing paths are returned without
@@ -77,7 +78,7 @@ def process_deployment(
         )
         return l1_path, grid_path
 
-    l0_tree = concat_l0(files, keep_counts=config.keep_counts)
+    l0_tree = concat_l0(files, keep_counts=config.keep_counts, groups=config.groups)
 
     try:
         l1_tree = make_l1(l0_tree, config)
