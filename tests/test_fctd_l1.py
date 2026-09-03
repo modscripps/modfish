@@ -15,7 +15,7 @@ def l0_tree(tmp_path):
 
 
 def test_l1_has_groups_and_derived(l0_tree):
-    cfg = FCTDConfig(tc=TCParams(phase_match=False))
+    cfg = FCTDConfig(tc=TCParams())
     l1 = make_l1(l0_tree, cfg)
     assert {"ctd", "casts", "efe"} <= set(l1.children)
     for v in ["t", "c", "t_raw", "c_raw", "SP", "SA", "CT", "sgth0", "depth", "cast"]:
@@ -23,85 +23,42 @@ def test_l1_has_groups_and_derived(l0_tree):
 
 
 def test_l1_corrections_off_t_equals_raw(l0_tree):
-    l1 = make_l1(l0_tree, FCTDConfig(tc=TCParams(phase_match=False)))
+    l1 = make_l1(l0_tree, FCTDConfig())
     np.testing.assert_array_equal(l1["ctd"].t.data, l1["ctd"].t_raw.data)
-    assert "phase_correct" not in l1["ctd"].attrs["corrections"]
+    assert l1["ctd"].attrs["corrections"] == "none"
 
 
-def test_l1_phase_match_stamps_attrs_keeps_axis(l0_tree):
-    cfg = FCTDConfig(tc=TCParams(phase_match=True, tcfit=(50, 290)))
-    l1 = make_l1(l0_tree, cfg)
-    assert l1["ctd"].sizes["time"] == l0_tree["ctd"].sizes["time"]
-    assert "tau1" in l1["ctd"].attrs
-    assert np.isnan(l1["ctd"].t.data).sum() > 0        # trimmed edges are NaN
-    assert not np.array_equal(l1["ctd"].t.data, l1["ctd"].t_raw.data)
-    # Explicit tcfit is recorded as-given: dedicated attr and corrections string.
-    assert tuple(l1["ctd"].attrs["tcfit"]) == (50, 290)
-    assert "tcfit=(50, 290)" in l1["ctd"].attrs["corrections"]
-
-
-def test_l1_phase_match_default_tcfit_resolved_not_none(l0_tree):
-    # When tcfit is left at its config default (None), phase_correct picks
-    # a range internally (tc.add_tcfit_default); the resolved range, not
-    # the unresolved None, must land in ctd.attrs and the corrections
-    # string.
-    cfg = FCTDConfig(tc=TCParams(phase_match=True, tcfit=None))
-    l1 = make_l1(l0_tree, cfg)
-    ctd = l1["ctd"]
-    assert ctd.attrs["tcfit"] is not None
-    assert "tcfit=None" not in ctd.attrs["corrections"]
-    assert f"tcfit={ctd.attrs['tcfit']}" in ctd.attrs["corrections"]
-
-
-def test_l1_phase_match_thermal_mass_viscous_conductivity_finite(l0_tree):
-    # Regression test: phase_correct's trimmed output must feed
-    # thermal_mass_correction (and viscous heating) while still NaN-free,
-    # not after being reindexed onto the full axis. thermal_mass's
-    # recursive filter propagates the first NaN it sees through every
-    # later sample, so a premature reindex would silently turn the whole
-    # `c` record NaN.
-    cfg = FCTDConfig(
-        tc=TCParams(
-            phase_match=True,
-            thermal_mass=True,
-            viscous_heating=True,
-            tcfit=(50, 290),
-        )
+def test_l1_chain_stamps_processing_and_keeps_axis(l0_tree):
+    cfg = FCTDConfig(tc=TCParams(lag=0.1, tau_t=0.05, lowpass=4.0, thermal_mass=True))
+    tree = make_l1(l0_tree, cfg)
+    ctd = tree["ctd"].to_dataset()
+    # ctd.time carries the "cast" coord label_casts attaches at L1 (l0_tree
+    # has no such coord yet), so .equals() on the raw time DataArrays would
+    # fail on that unrelated coordinate rather than on axis identity; compare
+    # values directly to test what this asserts: the correction chain did
+    # not reindex.
+    np.testing.assert_array_equal(
+        ctd.time.data, l0_tree["ctd"].to_dataset().time.data
     )
-    l1 = make_l1(l0_tree, cfg)
-    ctd = l1["ctd"]
-
-    c = ctd.c.data
-    finite = np.isfinite(c)
-    assert finite.mean() > 0.95
-
-    # NaNs, if any, are confined to the trimmed edges, not scattered
-    # through the interior.
-    interior_lo = int(0.05 * c.size)
-    interior_hi = int(0.95 * c.size)
-    nan_idx = np.flatnonzero(~finite)
-    if nan_idx.size:
-        assert not np.any((nan_idx > interior_lo) & (nan_idx < interior_hi))
-
-    t = ctd.t.data
-    t_raw = ctd.t_raw.data
-    interior = slice(interior_lo, interior_hi)
-    assert np.isfinite(t[interior]).all()
-    assert not np.allclose(t[interior], t_raw[interior])
-
-    corrections = ctd.attrs["corrections"]
-    assert "phase_correct" in corrections
-    assert "thermal_mass_correction" in corrections
-    assert "viscous_heating_temperature_correction" in corrections
-    assert "Pr=" in corrections
-    assert "scale=" in corrections
-
-    # t/c attrs (units, long_name) must survive the correction chain,
-    # including the plain-arithmetic viscous-heating step.
+    assert "response lag 0.100 s tau 0.050 s" in ctd.t.attrs["processing"]
+    assert "thermal mass" in ctd.c.attrs["processing"]
+    assert "tau1" not in ctd.attrs
+    assert np.isfinite(ctd.SP.data[:-2]).all()
+    # t/c attrs (units, long_name) must survive the correction chain, not
+    # just processing/corrections: a future _apply_tc that overwrote the
+    # pre-correction attrs wholesale, instead of merging processing on top
+    # of them, would pass every assertion above and still fail here.
     assert ctd["t"].attrs.get("units") == ctd["t_raw"].attrs.get("units")
     assert ctd["c"].attrs.get("units") == ctd["c_raw"].attrs.get("units")
     assert ctd["t"].attrs.get("long_name") == ctd["t_raw"].attrs.get("long_name")
     assert ctd["c"].attrs.get("long_name") == ctd["c_raw"].attrs.get("long_name")
+
+
+def test_l1_default_config_is_noop(l0_tree):
+    tree = make_l1(l0_tree)
+    ctd = tree["ctd"].to_dataset()
+    np.testing.assert_array_equal(ctd.t.data, ctd.t_raw.data)
+    assert ctd.attrs["corrections"] == "none"
 
 
 def test_l1_gps_gap_masks_interior_positions(l0_tree):
@@ -125,7 +82,7 @@ def test_l1_gps_gap_masks_interior_positions(l0_tree):
     mid_hi = int(0.6 * time.size)
     assert mid_hi > mid_lo
 
-    l1 = make_l1(tree, FCTDConfig(tc=TCParams(phase_match=False)))
+    l1 = make_l1(tree, FCTDConfig(tc=TCParams()))
     lat = l1["ctd"].lat.data
     lon = l1["ctd"].lon.data
     assert np.isnan(lon[mid_lo:mid_hi]).all()
@@ -135,9 +92,7 @@ def test_l1_gps_gap_masks_interior_positions(l0_tree):
     assert np.isfinite(lon[-5:]).all()
     assert np.isfinite(lat[-5:]).all()
 
-    cfg_fallback = FCTDConfig(
-        tc=TCParams(phase_match=False), latitude_fallback=3.0
-    )
+    cfg_fallback = FCTDConfig(tc=TCParams(), latitude_fallback=3.0)
     l1b = make_l1(tree, cfg_fallback)
     assert np.allclose(l1b["ctd"].lat.data[mid_lo:mid_hi], 3.0)
     assert np.isnan(l1b["ctd"].lon.data[mid_lo:mid_hi]).all()
@@ -146,7 +101,7 @@ def test_l1_gps_gap_masks_interior_positions(l0_tree):
 
 
 def test_l1_casts_group_matches_labels(l0_tree):
-    l1 = make_l1(l0_tree, FCTDConfig(tc=TCParams(phase_match=False)))
+    l1 = make_l1(l0_tree, FCTDConfig(tc=TCParams()))
     casts = l1["casts"]
     n = casts.sizes["cast"]
     assert n >= 2
@@ -171,15 +126,15 @@ def test_l1_no_casts_raises(tmp_path):
     files = write_l0_files(tmp_path, n_files=1, minutes=12.0)  # default flat 5-dbar p_fn: no casts
     tree = concat_l0(files)
     with pytest.raises(ValueError, match="no casts detected"):
-        make_l1(tree, FCTDConfig(tc=TCParams(phase_match=False)))
+        make_l1(tree, FCTDConfig(tc=TCParams()))
 
 
 def test_l1_no_gps_no_fallback_raises(tmp_path):
     files = write_l0_files(tmp_path, n_files=1, with_gps=False, p_fn=two_cast_p, minutes=12.0)
     tree = concat_l0(files)
     with pytest.raises(ValueError, match="latitude_fallback"):
-        make_l1(tree, FCTDConfig(tc=TCParams(phase_match=False)))
-    cfg = FCTDConfig(latitude_fallback=2.0, tc=TCParams(phase_match=False))
+        make_l1(tree, FCTDConfig(tc=TCParams()))
+    cfg = FCTDConfig(latitude_fallback=2.0, tc=TCParams())
     l1 = make_l1(tree, cfg)
     assert l1["ctd"].attrs["latitude_source"] == "fallback"
 
@@ -193,4 +148,4 @@ def test_l1_keep_counts_tree_raises(tmp_path):
     tree = concat_l0(files, keep_counts=True)
     assert "t_raw" in tree["ctd"].to_dataset().data_vars
     with pytest.raises(ValueError, match="keep_counts"):
-        make_l1(tree, FCTDConfig(tc=TCParams(phase_match=False)))
+        make_l1(tree, FCTDConfig(tc=TCParams()))

@@ -50,7 +50,10 @@ def read(file):
         Root dataset (dim `block`) plus one group per stream with data:
 
         - `ctd` : SBE49 CTD time series (`decode_sb49`); calibration
-          coefficients are stamped onto `tree["ctd"].attrs`.
+          coefficients and header setup fields (see "Root attrs" below)
+          are stamped onto `tree["ctd"].attrs`, so a consumer that opens
+          the `ctd` group on its own (as the L0 pipeline does) still sees
+          the instrument's `serialnum` and the rest.
         - `efe` : EFE4 microconductivity/accelerometer channels
           (`decode_efe4`), present only when both `$EFE4` and `$SOM3`
           blocks were found (the channel setup comes from `$SOM3`).
@@ -114,12 +117,14 @@ def read(file):
     cal = sbe49_cal(head)
     if not cal and "DCAL" in by_tag:
         cal = parse_dcal(by_tag["DCAL"][0].payload)
+    setup = header_setup(head)
 
     groups = {}
     if by_tag.get("SB49"):
         if cal:
             groups["ctd"] = decode_sb49(by_tag["SB49"], cal)
             groups["ctd"].attrs.update(cal)
+            groups["ctd"].attrs.update(setup)
         else:
             logger.warning(
                 "file has %d SB49 blocks but no calibration coefficients; ctd group omitted",
@@ -181,6 +186,6 @@ def read(file):
         n_resync=stats.n_resync,
         n_bad_checksum=stats.n_bad_checksum,
         **{f"n_blocks_{k}": v for k, v in stats.tag_counts.items()},
-        **header_setup(head),
+        **setup,
     )
     return tree

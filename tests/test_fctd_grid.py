@@ -11,7 +11,7 @@ from synth_l0 import two_cast_p, write_l0_files
 @pytest.fixture()
 def l1_tree(tmp_path):
     files = write_l0_files(tmp_path, n_files=3, minutes=12.0, p_fn=two_cast_p)
-    return make_l1(concat_l0(files), FCTDConfig(tc=TCParams(phase_match=False)))
+    return make_l1(concat_l0(files), FCTDConfig(tc=TCParams()))
 
 
 def test_grid_dims_and_coords(l1_tree):

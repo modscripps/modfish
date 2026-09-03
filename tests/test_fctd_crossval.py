@@ -22,8 +22,8 @@ in 84 s. About 36 minutes for the module. `pyproject.toml` sets
 plain `uv run pytest tests/` skips this module, and running it requires
 `uv run pytest -m slow` explicitly.
 
-Comparison contract (task brief): corrections off (`phase_match=False`,
-`thermal_mass=False`), `latitude_fallback=30.0` (a no-op on both, each
+Comparison contract (task brief): corrections off (`TCParams()`, whose
+defaults are all no-ops), `latitude_fallback=30.0` (a no-op on both, each
 deployment has continuous GPS), `dz=0.5`, casts matched to Matlab grid
 columns by profile mean time. Matching is mutual-nearest, not one-sided
 nearest. On d11 the python product has 201 casts against the Matlab
@@ -155,7 +155,7 @@ def crossval(tmp_path_factory):
     assert len(l0) == len(raw)
 
     cfg = FCTDConfig(
-        tc=TCParams(phase_match=False, thermal_mass=False),
+        tc=TCParams(),
         grid=GridParams(dz=0.5),
         latitude_fallback=30.0,
     )
@@ -225,7 +225,7 @@ def crossval2025(tmp_path_factory):
     assert len(l0) == len(raw)
 
     cfg = FCTDConfig(
-        tc=TCParams(phase_match=False, thermal_mass=False),
+        tc=TCParams(),
         grid=GridParams(dz=0.5),
         latitude_fallback=30.0,
     )
@@ -327,8 +327,9 @@ def test_crossval_d11_temperature_grid(crossval):
     ours, theirs, pairs = crossval
     diffs = _profile_diffs(ours, theirs, pairs, "t", "t")
     # Measured 2026-09-01: median 0.00214 K, p90 0.00242 K, max 0.0179 K.
-    # The floor is the Matlab low-pass, not a calibration or unit error;
-    # the same comparison run with phase_match=True gives 0.00169 K.
+    # The floor is the Matlab low-pass, not a calibration or unit error.
+    # History: sub-project 2's phase-match correction on this same
+    # comparison gave 0.00169 K, before the time-domain chain replaced it.
     assert np.nanmedian(diffs) < 0.01
     assert np.nanpercentile(diffs, 90) < 0.01
 
