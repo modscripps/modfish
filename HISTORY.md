@@ -21,16 +21,33 @@
     had extended `ctdproc`'s dual-sensor implementation to the
     single-sensor FCTD, carrying ctdproc's NumPy 2 reshape fix
     (ctdproc commit 5e75198).
--   Added `tc.correct` to `modfish.tc`: a time-domain T-C correction
-    chain (zero-phase low-pass, sensor response `lag`/`tau_t`, thermal
-    mass, viscous heating, each independently skippable) that preserves
-    the input time axis and stamps `processing` and `corrections` attrs
-    naming the steps applied. `FCTDConfig.tc`/`make_l1` now drive this
-    chain in place of the frequency-domain phase-matching path.
+-   Added `tc.correct` to `modfish.tc`: an explicit-parameter T-C
+    correction chain (zero-phase low-pass on `t`/`c`, sensor response on
+    `t` as a whole-record transfer function in `lag` and `tau_t`,
+    time-domain thermal mass on `c`, viscous heating on `t`, each
+    independently skippable) that preserves the input time axis and
+    stamps `processing` and `corrections` attrs naming the steps
+    applied. Every argument defaults to a no-op, so a cruise config opts
+    into each step. `FCTDConfig.tc`/`make_l1` now drive this chain in
+    place of the per-segment phase-matching path.
 -   Added T-C parameter estimators to `modfish.tc`: `find_lags`,
     `lag_tau_cost_map`, `salinity_roughness`, `downup_separation`,
     `rosette_rms`, and `thermal_mass_cost_map`, for fitting `lag`,
     `tau_t`, `alpha`, and `beta` against a deployment record.
+
+### Bug fixes
+-   `response_correction` now subtracts the straight line through the
+    record's first and last gap-filled sample before its whole-record
+    `rfft` and adds it back analytically. The FFT treats the record as
+    periodic, so a mismatch between the two ends (15 degC across a deep
+    cast) wrapped into a discontinuity that the fractional-delay sinc
+    kernel rang on through the whole record, distorting the
+    salinity-roughness cost used to fit `lag` and `tau_t`.
+-   `find_lags` no longer raises `IndexError` when a window's correlation
+    peak lands on the first or last lag of the correlation array. The
+    sub-sample quadratic refinement needs a neighbor on each side of the
+    peak, and where one is missing the raw peak lag is returned unrefined.
+    The case turned up on 1 of 152 real d09 casts.
 
 ### Documentation
 -   Documented the `modfish.modraw` subpackage in its module docstring
@@ -46,10 +63,10 @@
     phase-matching low-pass cutoff `f0` (6 Hz in `gvpy`, 9 in the orphaned
     `modfish.utils` copy), the thermal-mass `alpha`/`beta` pair, and
     whether `t`/`c` should be renamed.
--   Documented `TCParams` and `tc.correct` for the time-domain chain:
-    field-by-field provenance comments on `TCParams` (`lag`, `tau_t`,
-    `lowpass`, `alpha`, `beta`, `pr`), and the correction order, gap-fill
-    behavior, and no-op defaults on `tc.correct`. `make_l1`'s docstring
+-   Documented `TCParams` and `tc.correct` for the explicit-parameter
+    chain: field-by-field provenance comments on `TCParams` (`lag`,
+    `tau_t`, `lowpass`, `alpha`, `beta`, `pr`), and the correction order,
+    gap-fill behavior, and no-op defaults on `tc.correct`. `make_l1`'s docstring
     now states that `t`/`c` carry a `processing` attr and that the
     default `FCTDConfig()` applies no correction.
 
@@ -70,9 +87,8 @@
     cross-validation tests run about 36 minutes with the server mount
     present (`fctd_validation_notes.md`), so they are opt-in via
     `uv run pytest -m slow`.
--   Reshaped `TCParams` around `tc.correct`'s time-domain chain: `lag`,
-    `tau_t`, `lowpass`, and `pr` replace `phase_match`, `N`, `f0`, and
-    `tcfit`. Every field now defaults to a no-op, so `FCTDConfig()`
+-   Reshaped `TCParams` around `tc.correct`'s chain: `lag`, `tau_t`,
+    `lowpass`, and `pr` replace `phase_match`, `N`, `f0`, and `tcfit`. Every field now defaults to a no-op, so `FCTDConfig()`
     leaves `t`/`c` equal to `t_raw`/`c_raw`. `FCTDConfig.from_dict`
     raises `ValueError` naming the removed key and its replacement when
     a stale cruise config sets any of the four under `tc`.

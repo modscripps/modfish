@@ -24,13 +24,13 @@ cross-correlates differenced `t` and `c` in short windows and returns the
 apparent T-C lag per window with its mean pressure and fall rate.
 `phase_correct` fits the same transfer function per segment in the
 frequency domain and returns the T-C coherence along with it, which is
-what sets the low-pass cutoff. `lag_tau_cost_map` and
-`thermal_mass_cost_map` scan `(lag, tau_t)` and `(alpha, tau)` grids
-under one of three costs: `salinity_roughness`, the rms second difference
-of practical salinity; `downup_separation`, Morison's mean absolute
-salinity difference between consecutive down and up casts in temperature
-bins; and `rosette_rms`, the rms difference against a co-located
-shipboard rosette cast.
+what sets the low-pass cutoff. `lag_tau_cost_map` scans a `(lag, tau_t)`
+grid scored by `salinity_roughness`, the rms second difference of
+practical salinity. `thermal_mass_cost_map` scans an `(alpha, tau)` grid
+under a supplied objective, either `downup_separation`, Morison's mean
+absolute salinity difference between consecutive down and up casts in
+temperature bins, or `rosette_rms`, the rms difference against a
+co-located shipboard rosette cast.
 
 Lineage: consolidated from gvpy.mod (which extended ctdproc's dual-sensor
 implementation to the single-sensor FCTD). ctdproc reference for the
