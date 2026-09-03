@@ -45,6 +45,8 @@ import xarray as xr
 from scipy import fft, optimize, signal, stats
 from scipy.signal import butter, filtfilt
 
+from modfish.utils import sampling_interval
+
 logger = logging.getLogger(__name__)
 
 
@@ -340,9 +342,9 @@ def phase_correct(ds, N=128, f0=6.0, tcfit=None, return_spectra=False):
     Data must not contain NaNs. Despiking and gap filling belong upstream of
     this function.
     """
-    # Sampling interval read from the time axis rather than assumed. 16 Hz for
+    # Sampling interval read from the time axis, never assumed. 16 Hz for
     # the SBE49 on the FCTD, 24 Hz for the SBE9/11 the algorithm came from.
-    dt = float(np.median(np.diff(ds.time.data)) / np.timedelta64(1, "s"))
+    dt = sampling_interval(ds.time.data)
 
     # Fit range. Explicit argument wins over the dataset attribute.
     if tcfit is None:
@@ -702,10 +704,11 @@ def response_correction(
 
     Notes
     -----
-    `fs` is `1 / median(diff(time))`, the same convention `phase_correct`
-    and `thermal_mass_correction` use, so a time gap in a concatenated
-    record perturbs at most the samples adjacent to it, not the sampling
-    rate.
+    `fs` is the inverse of `modfish.utils.sampling_interval`, the mean
+    step over the gap-free stretches of `time`, the convention every
+    function in this module shares, so a time gap in a concatenated
+    record perturbs at most the samples adjacent to it and leaves the
+    sampling rate alone.
 
     The whole-record `rfft` treats the record as periodic, so a mismatch
     between the first and last sample wraps into a discontinuity that the
@@ -735,7 +738,7 @@ def response_correction(
     if lag == 0 and tau_t == 0:
         return ds
 
-    dt = float(np.median(np.diff(ds.time.data)) / np.timedelta64(1, "s"))
+    dt = sampling_interval(ds.time.data)
     fs = 1 / dt
 
     x_raw = ds[var].data
@@ -856,7 +859,7 @@ def thermal_mass_correction(
 
     ds = ds.copy(deep=True)
 
-    dt = float(np.median(np.diff(ds.time.data)) / np.timedelta64(1, "s"))
+    dt = sampling_interval(ds.time.data)
     fn = 1 / (2 * dt)
 
     T, _ = _fill_gaps(ds.t.data)
@@ -980,7 +983,7 @@ def find_lags(ds: xr.Dataset, window: int = 80, lowpass: float = 4.0) -> xr.Data
     dpdt = ds.dPdt.data
     p = ds.p.data
 
-    dt = float(np.median(np.diff(ds.time.data)) / np.timedelta64(1, "s"))
+    dt = sampling_interval(ds.time.data)
     freq = 1 / dt
 
     def fit_2d_poly(lags, corrs):
@@ -1078,7 +1081,7 @@ def salinity_roughness(
 
     SP = ds["SP"].data
     p = ds["p"].data
-    dt = float(np.median(np.diff(ds.time.data)) / np.timedelta64(1, "s"))
+    dt = sampling_interval(ds.time.data)
     nedge = int(round(edge / dt))
 
     if "cast" in ds.coords:
@@ -1491,7 +1494,7 @@ def correct(
     """
     ds = ds.copy(deep=True)
 
-    dt = float(np.median(np.diff(ds.time.data)) / np.timedelta64(1, "s"))
+    dt = sampling_interval(ds.time.data)
     fs = 1 / dt
 
     t_steps: list[str] = []

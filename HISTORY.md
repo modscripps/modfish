@@ -36,6 +36,21 @@
     `tau_t`, `alpha`, and `beta` against a deployment record.
 
 ### Bug fixes
+-   The sampling rate every `modfish.tc` function derives from the time
+    axis, and the one `modfish.fctd` uses for cast detection and `dPdt`,
+    now comes from one helper, `modfish.utils.sampling_interval`: the
+    mean step over the gap-free stretches of `time`. It used to be the
+    median step, which on the FCTD's 1 ms-quantized 16 Hz stamps reads
+    63.00 ms against a 62.50 ms mean, so every rate came out 0.8 % low.
+    The bias cancelled while estimation and application shared the
+    convention; it stops cancelling the moment a fitted time constant is
+    compared with a manufacturer value or one fitted elsewhere. The 2025
+    MOTIVE T-C values (`lag` 0.03 s, `tau_t` 0.05 s, `alpha` 0.010,
+    `beta` 1/12 s) were fitted under the median convention; applied
+    through the new one they map to sample units 0.8 % differently,
+    inside the widths of the fitted cost troughs (lag trough 0.08 to
+    0.09 s, `alpha` pinned to a factor 1.4), so the cruise config values
+    stand.
 -   `response_correction` now subtracts the straight line through the
     record's first and last gap-filled sample before its whole-record
     `rfft` and adds it back analytically. The FFT treats the record as
