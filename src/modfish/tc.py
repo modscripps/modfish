@@ -850,8 +850,10 @@ def thermal_mass_correction(
     with `dT` the sample-to-sample temperature difference and `ctm` in S/m.
 
     The recursion is evaluated with `scipy.signal.lfilter` (denominator
-    `[1, bb]`), which reproduces the sample-by-sample loop to 1e-15 on a
-    4 M-sample record in 0.03 s against 1.9 s.
+    `[1, bb]`), which reproduces the sample-by-sample loop to 1e-15. On a
+    4 M-sample record this function takes 0.2 s against 1.9 s for the
+    previous loop; the `lfilter` call itself accounts for 0.03 s of that,
+    the rest being the deep copy, gap fill and gamma computation.
     """
     if alpha <= 0:
         raise ValueError(

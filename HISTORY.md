@@ -122,7 +122,7 @@
 -   `tc.downup_separation` indexes casts by their time runs and
     `tc.thermal_mass_correction` evaluates its recursion with
     `scipy.signal.lfilter`; a 242-point thermal-mass cost map on the full
-    2025 d12 record drops from about 45 min to under 5 min.
+    2025 d12 record drops from about 45 min to about 10 min.
 -   Added cross-validation fixtures and tests against the Matlab and rust
     `.modraw` readers.
 -   Removed the orphaned ctdproc-derived T-C block from `modfish.utils`
