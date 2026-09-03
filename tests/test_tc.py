@@ -679,3 +679,139 @@ def test_thermal_mass_cost_map_dims_and_beta_is_inverse_tau():
     assert fixed_tau[0] != pytest.approx(fixed_tau[1])
     fixed_alpha = cm.cost.sel(alpha=alphas[0]).data
     assert fixed_alpha[0] != pytest.approx(fixed_alpha[1])
+
+
+def make_gapped_pair(minutes=20, gap_start_s=600.0, gap_s=200.0, jump=5.0):
+    """A synthetic record and the same record with a chunk removed and a jump across it.
+
+    The full record is `make_synthetic_ctd` with a 5 degC offset added to `t`
+    over the samples that are then removed, so `full` is continuous in time
+    and the 5 degC change appears only in the gapped record, across its gap
+    (the matching `c` change is left out on purpose: the test compares the
+    correction of the gapped record with the correction of the full one, so
+    only the chain's response to the gap matters). Returns (full, gapped,
+    kept), `kept` the boolean mask of the retained samples in `full`.
+
+    The offset is ramped over the removed interval instead of stepped at its
+    end so that `full` carries no step of its own. A step there would put the
+    same spike and thermal-mass transient into the reference that the fix is
+    meant to remove from `out`, and the two would partly cancel: measured on
+    this record, the correction of the gapped record then sat 5.4e-5 from the
+    reference in `c` before the fix and 4.1e-4 after it, so the comparison
+    ran backwards. `gapped` is bit-identical under either construction, since
+    the samples the ramp passes through are the removed ones.
+    """
+    full = make_synthetic_ctd(minutes=minutes)
+    fs = 16.0
+    i0, i1 = int(gap_start_s * fs), int((gap_start_s + gap_s) * fs)
+    t = full.t.data.copy()
+    t += jump * np.clip((np.arange(t.size) - i0) / (i1 - i0), 0.0, 1.0)
+    full = full.assign(t=("time", t))
+    kept = np.ones(full.sizes["time"], dtype=bool)
+    kept[i0:i1] = False
+    return full, full.isel(time=kept), kept
+
+
+def test_correct_gap_free_record_is_bit_identical():
+    ds = make_synthetic_ctd(minutes=5)
+    kw = dict(lag=0.03, tau_t=0.05, lowpass=5.0, thermal_mass=True, alpha=0.01, beta=1 / 12)
+    out = tc.correct(ds, **kw)
+    # the reference: the same call on a copy is deterministic; the point of
+    # the test is that the uniform-grid path is skipped when there is no gap
+    ref = tc.correct(ds.copy(deep=True), **kw)
+    np.testing.assert_array_equal(out.t.data, ref.t.data)
+    np.testing.assert_array_equal(out.c.data, ref.c.data)
+    assert np.array_equal(out.time.data, ds.time.data)
+
+
+def test_correct_gapped_record_matches_full_record_away_from_the_gap():
+    full, gapped, kept = make_gapped_pair()
+    kw = dict(lag=0.03, tau_t=0.05, lowpass=5.0, thermal_mass=True, alpha=0.01, beta=1 / 12)
+    ref = tc.correct(full, **kw).isel(time=kept)
+    out = tc.correct(gapped, **kw)
+    assert np.array_equal(out.time.data, gapped.time.data)
+    # exclude 60 s on either side of the gap: the ramp the fill draws across
+    # the gap is not the true signal, so the recursion's state differs there.
+    # 60 s is four thermal-mass relaxation times at beta = 1/12, which is what
+    # it takes for that state difference to fall under the 1e-5 tolerance
+    # (3.8e-5 at 30 s, 3.1e-6 at 60 s).
+    fs = 16.0
+    i0 = int(600.0 * fs)
+    far = np.ones(out.sizes["time"], dtype=bool)
+    far[i0 - int(60 * fs): i0 + int(60 * fs)] = False
+    dt_ = np.abs(out.t.data - ref.t.data)[far]
+    dc_ = np.abs(out.c.data - ref.c.data)[far]
+    assert np.nanmax(dt_) < 1e-3
+    assert np.nanmax(dc_) < 1e-5
+
+
+def test_correct_gapped_record_has_no_spike_at_the_gap():
+    full, gapped, kept = make_gapped_pair()
+    out = tc.correct(gapped, lag=0.03, tau_t=0.05, lowpass=5.0)
+    # before the fix the derivative term turned the 5 degC step into a spike
+    # of several degrees; after it, the corrected t stays within the range
+    # of the raw t plus a margin at every sample
+    lo, hi = np.nanmin(gapped.t.data) - 0.5, np.nanmax(gapped.t.data) + 0.5
+    assert np.nanmin(out.t.data) > lo
+    assert np.nanmax(out.t.data) < hi
+
+
+def test_response_and_thermal_mass_alone_use_the_uniform_grid():
+    full, gapped, kept = make_gapped_pair()
+    r_ref = tc.response_correction(full, lag=0.03, tau_t=0.05).isel(time=kept)
+    r_out = tc.response_correction(gapped, lag=0.03, tau_t=0.05)
+    m_ref = tc.thermal_mass_correction(full, alpha=0.01, beta=1 / 12).isel(time=kept)
+    m_out = tc.thermal_mass_correction(gapped, alpha=0.01, beta=1 / 12)
+    # 60 s exclusion, as in the test above
+    fs = 16.0
+    i0 = int(600.0 * fs)
+    far = np.ones(r_out.sizes["time"], dtype=bool)
+    far[i0 - int(60 * fs): i0 + int(60 * fs)] = False
+    assert np.nanmax(np.abs(r_out.t.data - r_ref.t.data)[far]) < 1e-2
+    assert np.nanmax(np.abs(m_out.c.data - m_ref.c.data)[far]) < 1e-5
+
+
+def test_uniform_slots_rejects_two_samples_in_one_slot():
+    ds = make_synthetic_ctd(minutes=1)
+    time = ds.time.data.copy()
+    time[10] = time[9]
+    with pytest.raises(ValueError):
+        tc._uniform_slots(time)
+
+
+def test_uniform_slots_tolerates_stamp_drift_within_a_gap_free_stretch():
+    """A record whose stamps drift against one global interval keeps its slots.
+
+    The FCTD's 1 ms-quantized stamps run at 62 or 63 ms and their phase
+    against the 62.5 ms mean drifts by more than half a sample over a
+    multi-hour record. Rounding every sample's offset from `time[0]` onto one
+    global grid then puts two samples in the same slot: 12700 times on the
+    2025 d07 record and 16481 times on d12, both of which have every time
+    step strictly positive. Counting slots along the steps instead leaves a
+    gap-free stretch exactly as it was.
+    """
+    n = 20000
+    step_ms = np.where(np.arange(n - 1) < n // 2, 62.0, 63.0)
+    time = np.datetime64("2024-11-20") + np.concatenate(
+        ([0.0], np.cumsum(step_ms))
+    ).astype("timedelta64[ms]")
+
+    slots, n_slots, dt = tc._uniform_slots(time)
+    assert np.array_equal(slots, np.arange(n))
+    assert n_slots == n
+
+    # the same record under the global-rounding rule collides
+    offset = (time - time[0]) / np.timedelta64(1, "s")
+    global_slots = np.round(offset / dt).astype("int64")
+    assert np.any(np.diff(global_slots) <= 0)
+
+
+def test_uniform_slots_opens_only_the_missing_slots_at_a_gap():
+    ds = make_synthetic_ctd(minutes=2)
+    fs = 16.0
+    kept = np.ones(ds.sizes["time"], dtype=bool)
+    kept[320:640] = False  # 20 s of samples removed, 320 slots
+    slots, n_slots, dt = tc._uniform_slots(ds.isel(time=kept).time.data)
+    assert n_slots == ds.sizes["time"]
+    assert np.array_equal(slots, np.flatnonzero(kept))
+    assert dt == pytest.approx(1 / fs)

@@ -48,6 +48,13 @@
     every group is loaded.
 
 ### Bug fixes
+-   `tc.correct`, `tc.response_correction` and `tc.thermal_mass_correction`
+    lay the record on a uniform time grid before running, so a time gap in
+    a concatenated record no longer feeds a step into the low-pass, the
+    derivative term and the thermal-mass recursion. On the 2025 MOTIVE d09
+    record a 276 s gap had produced spikes of several degrees in corrected
+    temperature and salinity errors above 0.01 over about a minute after
+    the gap.
 -   The sampling rate every `modfish.tc` function derives from the time
     axis, and the one `modfish.fctd` uses for cast detection and `dPdt`,
     now comes from one helper, `modfish.utils.sampling_interval`: the

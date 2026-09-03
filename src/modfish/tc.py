@@ -145,6 +145,151 @@ def _fill_gaps(x: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return filled, mask
 
 
+def _uniform_slots(time: np.ndarray) -> tuple[np.ndarray, int, float]:
+    """Slot index of every sample on a uniform grid at the record's sampling interval.
+
+    A concatenated deployment record has time gaps, so its samples do not
+    sit on a uniform grid even though every step of the correction chain
+    treats them as if they did. This walks the record sample by sample and
+    advances one slot per regular step, `round(step / dt)` slots per step
+    longer than 1.5 `dt`. A gap therefore opens the slots it is missing
+    and every other sample keeps the position it already had.
+
+    Parameters
+    ----------
+    time : numpy.ndarray
+        Timestamps, dtype datetime64, strictly increasing, at least two of
+        them.
+
+    Returns
+    -------
+    slots : numpy.ndarray
+        Integer slot index of every sample, strictly increasing from
+        `slots[0] = 0`.
+    n_slots : int
+        Number of slots on the grid, `slots[-1] + 1`. Equal to `time.size`
+        when the record has no gap.
+    dt : float
+        Sampling interval [s] from `modfish.utils.sampling_interval`.
+
+    Raises
+    ------
+    ValueError
+        If any time step is zero or negative. Two samples would then land
+        in the same slot or out of order, and laying the record on a grid
+        would drop or reorder samples.
+
+    Notes
+    -----
+    The 1.5 `dt` threshold is the upper end of the range
+    `modfish.utils.sampling_interval` calls a regular step, so a step it
+    counts towards the interval takes one slot here.
+
+    Accumulating slots along the steps, in place of rounding each sample's
+    offset from `time[0]` onto one global grid, is what keeps the mapping
+    usable on a real record. The FCTD's stamps drift by more than half a
+    sample against any single interval over a multi-hour record: on the
+    2025 MOTIVE records that global rounding put two samples in one slot
+    12700 times on d07 and 16481 times on d12, while every time step in
+    both records is strictly positive. Accumulation has no such drift, and
+    it reproduces the old index-as-time behavior exactly inside every
+    gap-free stretch.
+    """
+    time = np.asarray(time)
+    dt = sampling_interval(time)
+    step = np.diff(time) / np.timedelta64(1, "s")
+    if np.any(step <= 0):
+        bad = int(np.argmax(step <= 0))
+        raise ValueError(
+            f"time step {step[bad]} s at sample {bad + 1} is not positive; "
+            "two samples would fall in the same slot of the uniform time "
+            "grid, or out of order"
+        )
+    advance = np.where(step > 1.5 * dt, np.round(step / dt), 1.0).astype("int64")
+    slots = np.concatenate(([0], np.cumsum(advance)))
+    return slots, int(slots[-1]) + 1, dt
+
+
+def _on_uniform_grid(ds: xr.Dataset, variables: tuple[str, ...], fn) -> xr.Dataset:
+    """Run `fn` on `ds` re-laid onto a uniform time grid, return results on `ds`'s own axis.
+
+    Builds a Dataset whose `time` is `time[0] + arange(n_slots) * dt` and
+    whose `variables` hold each sample at its slot and NaN elsewhere,
+    calls `fn` on it, then takes the original slots back out of the
+    result. A time gap therefore reaches `fn` as a run of NaN, which the
+    gap fill inside each step bridges with a linear ramp, in place of the
+    step between two adjacent samples it would otherwise see.
+
+    Parameters
+    ----------
+    ds : xarray.Dataset
+        CTD time series on a `time` coordinate of dtype datetime64.
+    variables : tuple of str
+        Names of the variables `fn` reads. Those absent from `ds` are
+        skipped.
+    fn : callable
+        Takes a Dataset and returns a Dataset on the same time axis.
+
+    Returns
+    -------
+    out : xarray.Dataset
+        Deep copy of `ds` with every time-dimensioned variable of `fn`'s
+        result written back at the original samples' slots, carrying
+        `fn`'s variable and dataset attributes. The time axis is `ds`'s.
+
+    Notes
+    -----
+    When `n_slots` equals the number of samples the record has no gap and
+    `fn(ds)` is called directly, so a gap-free record goes through the
+    existing code path with no re-laying at all and its output is
+    unchanged to the last bit.
+
+    The uniform axis is built from integer nanoseconds so that no float
+    rounding drifts along a multi-million-sample record. Slot 0 and the
+    last slot hold original samples by construction, so the inserted NaN
+    are always interior and `_fill_gaps` interpolates rather than
+    extrapolates across them.
+    """
+    slots, n_slots, dt = _uniform_slots(ds.time.data)
+    if n_slots == ds.sizes["time"]:
+        return fn(ds)
+
+    logger.info(
+        "%d samples span %d slots at %g s; running on a uniform time grid",
+        ds.sizes["time"],
+        n_slots,
+        dt,
+    )
+    time_uniform = ds.time.data[0] + (np.arange(n_slots) * round(dt * 1e9)).astype(
+        "timedelta64[ns]"
+    )
+    data_vars = {}
+    for v in variables:
+        if v in ds:
+            data = np.asarray(ds[v].data)
+            if not np.issubdtype(data.dtype, np.floating):
+                data = data.astype(float)
+            padded = np.full(n_slots, np.nan, dtype=data.dtype)
+            padded[slots] = data
+            data_vars[v] = (ds[v].dims, padded, dict(ds[v].attrs))
+    uniform = xr.Dataset(
+        coords=dict(time=("time", time_uniform)),
+        data_vars=data_vars,
+        attrs=dict(ds.attrs),
+    )
+
+    result = fn(uniform)
+
+    out = ds.copy(deep=True)
+    for name, da in result.data_vars.items():
+        if "time" in da.dims:
+            out[name] = (da.dims, np.asarray(da.data)[slots], dict(da.attrs))
+        else:
+            out[name] = da
+    out.attrs = dict(result.attrs)
+    return out
+
+
 def add_tcfit_default(ds):
     """Set a default pressure range for the T-C phase fit.
 
@@ -727,6 +872,13 @@ def response_correction(
     `(1 + i 2 pi f tau_t)` factor is a time-derivative operator, adding
     `tau_t * b`; the restored line is therefore
     `a + b*(t + lag) + tau_t*b`.
+
+    The record is laid out on a uniform time grid at its own sampling
+    interval (`_on_uniform_grid`) before the FFT, so a time gap arrives
+    as a run of missing samples that the gap fill bridges with a linear
+    ramp, in place of a step for the fractional-delay sinc and the
+    derivative term to ring on. A record without a gap is corrected as it
+    is, with no re-laying.
     """
     if lag < 0:
         raise ValueError(
@@ -734,34 +886,38 @@ def response_correction(
             f"advancing ahead of conductivity); got lag={lag}"
         )
 
-    ds = ds.copy(deep=True)
     if lag == 0 and tau_t == 0:
+        return ds.copy(deep=True)
+
+    def _apply(ds: xr.Dataset) -> xr.Dataset:
+        ds = ds.copy(deep=True)
+
+        dt = sampling_interval(ds.time.data)
+        fs = 1 / dt
+
+        x_raw = ds[var].data
+        x, mask = _fill_gaps(x_raw)
+        n = x.size
+
+        t_idx = np.arange(n) * dt
+        a = x[0]
+        b = (x[-1] - x[0]) / t_idx[-1] if n > 1 else 0.0
+        resid = x - (a + b * t_idx)
+
+        f = np.fft.rfftfreq(n, d=1 / fs)
+        H = (1 + 1j * 2 * np.pi * f * tau_t) * np.exp(1j * 2 * np.pi * f * lag)
+        y = np.fft.irfft(np.fft.rfft(resid) * H, n)
+        y += a + b * (t_idx + lag) + tau_t * b
+
+        if lag > 0:
+            ntrail = int(np.ceil(lag * fs))
+            y[-ntrail:] = np.nan
+        y[mask] = np.nan
+
+        ds[var] = (ds[var].dims, y, ds[var].attrs)
         return ds
 
-    dt = sampling_interval(ds.time.data)
-    fs = 1 / dt
-
-    x_raw = ds[var].data
-    x, mask = _fill_gaps(x_raw)
-    n = x.size
-
-    t_idx = np.arange(n) * dt
-    a = x[0]
-    b = (x[-1] - x[0]) / t_idx[-1] if n > 1 else 0.0
-    resid = x - (a + b * t_idx)
-
-    f = np.fft.rfftfreq(n, d=1 / fs)
-    H = (1 + 1j * 2 * np.pi * f * tau_t) * np.exp(1j * 2 * np.pi * f * lag)
-    y = np.fft.irfft(np.fft.rfft(resid) * H, n)
-    y += a + b * (t_idx + lag) + tau_t * b
-
-    if lag > 0:
-        ntrail = int(np.ceil(lag * fs))
-        y[-ntrail:] = np.nan
-    y[mask] = np.nan
-
-    ds[var] = (ds[var].dims, y, ds[var].attrs)
-    return ds
+    return _on_uniform_grid(ds, (var,), _apply)
 
 
 def thermal_mass_correction(
@@ -854,6 +1010,14 @@ def thermal_mass_correction(
     4 M-sample record this function takes 0.2 s against 1.9 s for the
     previous loop; the `lfilter` call itself accounts for 0.03 s of that,
     the rest being the deep copy, gap fill and gamma computation.
+
+    The record is laid out on a uniform time grid at its own sampling
+    interval (`_on_uniform_grid`) before the recursion runs, so a time
+    gap arrives as a run of missing samples that the gap fill bridges
+    with a linear ramp. A step in `t` between the two samples adjacent to
+    a gap would otherwise start a transient the recursion carries for a
+    few time constants. A record without a gap is corrected as it is,
+    with no re-laying.
     """
     if alpha <= 0:
         raise ValueError(
@@ -863,32 +1027,35 @@ def thermal_mass_correction(
     if dcdt not in ("sbe", "constant"):
         raise ValueError(f"dcdt must be 'sbe' or 'constant', got {dcdt!r}")
 
-    ds = ds.copy(deep=True)
+    def _apply(ds: xr.Dataset) -> xr.Dataset:
+        ds = ds.copy(deep=True)
 
-    dt = sampling_interval(ds.time.data)
-    fn = 1 / (2 * dt)
+        dt = sampling_interval(ds.time.data)
+        fn = 1 / (2 * dt)
 
-    T, _ = _fill_gaps(ds.t.data)
-    C, c_mask = _fill_gaps(ds.c.data)
+        T, _ = _fill_gaps(ds.t.data)
+        C, c_mask = _fill_gaps(ds.c.data)
 
-    if dcdt == "sbe":
-        gamma = 0.1 * (1 + 0.006 * (T - 20))
-    else:
-        gamma = np.full_like(T, 0.1)
+        if dcdt == "sbe":
+            gamma = 0.1 * (1 + 0.006 * (T - 20))
+        else:
+            gamma = np.full_like(T, 0.1)
 
-    dTp = np.diff(T, prepend=T[0])
-    dTp[0] = dTp[1]
+        dTp = np.diff(T, prepend=T[0])
+        dTp[0] = dTp[1]
 
-    aa = 4 * fn * alpha / beta / (1 + 4 * fn / beta)
-    bb = 1 - 2 * aa / alpha
-    x = aa * gamma * dTp
-    x[0] = 0.0  # the loop starts at index 1 with ctm[0] = 0
-    ctm = signal.lfilter([1.0], [1.0, bb], x)
+        aa = 4 * fn * alpha / beta / (1 + 4 * fn / beta)
+        bb = 1 - 2 * aa / alpha
+        x = aa * gamma * dTp
+        x[0] = 0.0  # the loop starts at index 1 with ctm[0] = 0
+        ctm = signal.lfilter([1.0], [1.0, bb], x)
 
-    c_out = C + ctm
-    c_out[c_mask] = np.nan
-    ds["c"] = (ds.c.dims, c_out, ds.c.attrs)
-    return ds
+        c_out = C + ctm
+        c_out[c_mask] = np.nan
+        ds["c"] = (ds.c.dims, c_out, ds.c.attrs)
+        return ds
+
+    return _on_uniform_grid(ds, ("t", "c"), _apply)
 
 
 def viscous_heating_temperature_correction(v, Pr: float = 12.4) -> np.ndarray:
@@ -1530,55 +1697,74 @@ def correct(
     unmodified copy of `ds`: `t`, `c`, `p` and `dPdt` are byte-for-byte
     identical to the input, and both `processing` attrs and
     `attrs["corrections"]` read `"none"`.
+
+    The whole chain runs on the record laid out on a uniform time grid at
+    its own sampling interval (`_on_uniform_grid`), and the result comes
+    back on the input time axis. A time gap in a concatenated deployment
+    record then reaches each step as a run of missing samples that the
+    gap fill bridges with a linear ramp. Without the grid the two samples
+    adjacent to a gap present a step of several degrees: the zero-phase
+    low-pass smears it, the `(1 + i 2 pi f tau_t)` term differentiates it
+    into a spike, and the thermal-mass recursion carries the transient
+    for a few time constants. On the 2025 MOTIVE d09 record, where a
+    276 s gap has pressure jumping from 385 to 61 dbar, the whole-record
+    chain differed from a per-stretch one by up to 3.5 degC in `t` and
+    4.3 in practical salinity, with 631 samples above 0.01 in salinity
+    within about a minute after the gap. A record without a gap is handed
+    to the steps as it is, so its output is unchanged to the last bit.
     """
-    ds = ds.copy(deep=True)
 
-    dt = sampling_interval(ds.time.data)
-    fs = 1 / dt
+    def _chain(ds: xr.Dataset) -> xr.Dataset:
+        ds = ds.copy(deep=True)
 
-    t_steps: list[str] = []
-    c_steps: list[str] = []
-    corrections: list[str] = []
+        dt = sampling_interval(ds.time.data)
+        fs = 1 / dt
 
-    if lowpass is not None:
-        t_attrs = dict(ds["t"].attrs)
-        c_attrs = dict(ds["c"].attrs)
+        t_steps: list[str] = []
+        c_steps: list[str] = []
+        corrections: list[str] = []
 
-        t_raw, t_mask = _fill_gaps(ds["t"].data)
-        c_raw, c_mask = _fill_gaps(ds["c"].data)
-        t_lp = lowpassfilter(t_raw, lowcut=lowpass, fs=fs)
-        c_lp = lowpassfilter(c_raw, lowcut=lowpass, fs=fs)
-        t_lp[t_mask] = np.nan
-        c_lp[c_mask] = np.nan
+        if lowpass is not None:
+            t_attrs = dict(ds["t"].attrs)
+            c_attrs = dict(ds["c"].attrs)
 
-        ds["t"] = (ds["t"].dims, t_lp, t_attrs)
-        ds["c"] = (ds["c"].dims, c_lp, c_attrs)
+            t_raw, t_mask = _fill_gaps(ds["t"].data)
+            c_raw, c_mask = _fill_gaps(ds["c"].data)
+            t_lp = lowpassfilter(t_raw, lowcut=lowpass, fs=fs)
+            c_lp = lowpassfilter(c_raw, lowcut=lowpass, fs=fs)
+            t_lp[t_mask] = np.nan
+            c_lp[c_mask] = np.nan
 
-        t_steps.append(f"lowpass {lowpass} Hz")
-        c_steps.append(f"lowpass {lowpass} Hz")
-        corrections.append(f"lowpassfilter(lowcut={lowpass}, fs={fs})")
+            ds["t"] = (ds["t"].dims, t_lp, t_attrs)
+            ds["c"] = (ds["c"].dims, c_lp, c_attrs)
 
-    if lag != 0 or tau_t != 0:
-        ds = response_correction(ds, lag=lag, tau_t=tau_t, var="t")
-        t_steps.append(f"response lag {lag:.3f} s tau {tau_t:.3f} s")
-        corrections.append(f"response_correction(lag={lag}, tau_t={tau_t})")
+            t_steps.append(f"lowpass {lowpass} Hz")
+            c_steps.append(f"lowpass {lowpass} Hz")
+            corrections.append(f"lowpassfilter(lowcut={lowpass}, fs={fs})")
 
-    if thermal_mass:
-        ds = thermal_mass_correction(ds, alpha=alpha, beta=beta)
-        c_steps.append(f"thermal mass alpha={alpha} beta={beta}")
-        corrections.append(f"thermal_mass_correction(alpha={alpha}, beta={beta})")
+        if lag != 0 or tau_t != 0:
+            ds = response_correction(ds, lag=lag, tau_t=tau_t, var="t")
+            t_steps.append(f"response lag {lag:.3f} s tau {tau_t:.3f} s")
+            corrections.append(f"response_correction(lag={lag}, tau_t={tau_t})")
 
-    if viscous_heating:
-        v = np.abs(ds["dPdt"].data)
-        dT = viscous_heating_temperature_correction(v, Pr=pr)
-        t_attrs = dict(ds["t"].attrs)
-        ds["t"] = ds["t"] - dT
-        ds["t"].attrs = t_attrs
-        t_steps.append(f"viscous heating pr={pr}")
-        corrections.append(f"viscous_heating_temperature_correction(pr={pr})")
+        if thermal_mass:
+            ds = thermal_mass_correction(ds, alpha=alpha, beta=beta)
+            c_steps.append(f"thermal mass alpha={alpha} beta={beta}")
+            corrections.append(f"thermal_mass_correction(alpha={alpha}, beta={beta})")
 
-    ds["t"].attrs["processing"] = "; ".join(t_steps) if t_steps else "none"
-    ds["c"].attrs["processing"] = "; ".join(c_steps) if c_steps else "none"
-    ds.attrs["corrections"] = "; ".join(corrections) if corrections else "none"
+        if viscous_heating:
+            v = np.abs(ds["dPdt"].data)
+            dT = viscous_heating_temperature_correction(v, Pr=pr)
+            t_attrs = dict(ds["t"].attrs)
+            ds["t"] = ds["t"] - dT
+            ds["t"].attrs = t_attrs
+            t_steps.append(f"viscous heating pr={pr}")
+            corrections.append(f"viscous_heating_temperature_correction(pr={pr})")
 
-    return ds
+        ds["t"].attrs["processing"] = "; ".join(t_steps) if t_steps else "none"
+        ds["c"].attrs["processing"] = "; ".join(c_steps) if c_steps else "none"
+        ds.attrs["corrections"] = "; ".join(corrections) if corrections else "none"
+
+        return ds
+
+    return _on_uniform_grid(ds, ("t", "c", "p", "dPdt"), _chain)
