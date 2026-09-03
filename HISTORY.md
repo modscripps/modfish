@@ -58,6 +58,10 @@
     cast) wrapped into a discontinuity that the fractional-delay sinc
     kernel rang on through the whole record, distorting the
     salinity-roughness cost used to fit `lag` and `tau_t`.
+-   `io.load_fctd_raw_mat` labels `c` as S/m. The attr read mS/cm while
+    the values were S/m (a median of 3.3 S/m on files from both MOTIVE
+    cruises, giving a practical salinity of 34.5 when read as S/m),
+    which `modfish.modraw` had labelled correctly all along.
 -   `find_lags` no longer raises `IndexError` when a window's correlation
     peak lands on the first or last lag of the correlation array. The
     sub-sample quadratic refinement needs a neighbor on each side of the

@@ -309,7 +309,7 @@ def load_fctd_raw_mat(file):
             ds[var] = (("time"), d[var])
 
     ds.p.attrs = dict(long_name="pressure", units="dbar")
-    ds.c.attrs = dict(long_name="conductivity", units="mS/cm")
+    ds.c.attrs = dict(long_name="conductivity", units="S/m")
     ds.t.attrs = dict(long_name="temperature", units="°C")
     if "chi" in ds:
         ds.chi.attrs = dict(long_name=r"$\chi$", units="K$^2$/s")
