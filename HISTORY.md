@@ -48,6 +48,13 @@
     sub-sample quadratic refinement needs a neighbor on each side of the
     peak, and where one is missing the raw peak lag is returned unrefined.
     The case turned up on 1 of 152 real d09 casts.
+-   `modraw.read` now stamps the header setup fields (`survey`,
+    `experiment`, `cruise`, `vehicle`, `fishflag`, `serialnum`,
+    `gm_time`) onto the `ctd` group's own attrs, alongside the SBE49
+    calibration coefficients that were already there. They had been
+    written to the DataTree root only, so a consumer that opens the
+    `ctd` group on its own, as the L0 pipeline does, never saw
+    `serialnum`, `vehicle`, `cruise` or `gm_time`.
 
 ### Documentation
 -   Documented the `modfish.modraw` subpackage in its module docstring
@@ -58,11 +65,14 @@
     unverified ALTI frame layout, and the header length field's unsafe use
     as a read boundary.
 -   Documented the `modfish.fctd` subpackage and `modfish.tc` module in
-    their docstrings, including the three parameter choices left open for
-    the T-C correction analysis (FCTD reprocessing sub-project 3): the
+    their docstrings, including three parameter choices left open at the
+    time for the T-C correction analysis (FCTD reprocessing
+    sub-project 3): the
     phase-matching low-pass cutoff `f0` (6 Hz in `gvpy`, 9 in the orphaned
     `modfish.utils` copy), the thermal-mass `alpha`/`beta` pair, and
-    whether `t`/`c` should be renamed.
+    whether `t`/`c` should be renamed. All three were settled while the
+    T-C correction chain was built, and the docstrings now record the
+    outcome.
 -   Documented `TCParams` and `tc.correct` for the explicit-parameter
     chain: field-by-field provenance comments on `TCParams` (`lag`,
     `tau_t`, `lowpass`, `alpha`, `beta`, `pr`), and the correction order,
@@ -88,8 +98,9 @@
     present (`fctd_validation_notes.md`), so they are opt-in via
     `uv run pytest -m slow`.
 -   Reshaped `TCParams` around `tc.correct`'s chain: `lag`, `tau_t`,
-    `lowpass`, and `pr` replace `phase_match`, `N`, `f0`, and `tcfit`. Every field now defaults to a no-op, so `FCTDConfig()`
-    leaves `t`/`c` equal to `t_raw`/`c_raw`. `FCTDConfig.from_dict`
+    `lowpass`, and `pr` replace `phase_match`, `N`, `f0`, and `tcfit`.
+    Every field now defaults to a no-op, so `FCTDConfig()` leaves `t`/`c`
+    equal to `t_raw`/`c_raw`. `FCTDConfig.from_dict`
     raises `ValueError` naming the removed key and its replacement when
     a stale cruise config sets any of the four under `tc`.
 -   Rewrote `_apply_tc` in `modfish.fctd.l1` as a thin wrapper around

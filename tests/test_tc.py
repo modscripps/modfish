@@ -202,6 +202,16 @@ def test_thermal_mass_correction_does_not_mutate_input():
     np.testing.assert_array_equal(ds.c.data, before)
 
 
+def test_thermal_mass_correction_alpha_zero_raises_value_error():
+    # bb = 1 - 2 * aa / alpha divides by alpha, so alpha = 0 used to raise a
+    # bare ZeroDivisionError from deep inside the recursion setup. The guard
+    # turns it into a ValueError naming the parameter and the way to skip the
+    # step.
+    ds = make_synthetic_ctd().isel(time=slice(0, 64))
+    with pytest.raises(ValueError, match="alpha"):
+        tc.thermal_mass_correction(ds, alpha=0.0)
+
+
 def test_find_lags_recovers_known_lag():
     ds = make_synthetic_ctd(tau=0.0, lag=4 / 16.0)  # pure 4-sample lag
     out = tc.find_lags(ds)
@@ -498,8 +508,12 @@ def test_find_lags_peak_at_lag_axis_end_does_not_raise():
     )
     out = tc.find_lags(ds, window=window, lowpass=4.0)
     assert out.lag.sizes["segment"] > 0
+    # the fallback returns the raw peak lag, here the extreme lag of the
+    # correlation array: window - 2 = 78 sample steps at 16 Hz, negated by
+    # the sign flip that puts the result in the "positive means t lags c"
+    # convention.
     first = float(out.lag.values[0])
-    assert np.isfinite(first) or np.isnan(first)
+    assert first == pytest.approx(-(window - 2) / fs)
 
 
 def test_downup_separation_zero_for_identical_down_up():

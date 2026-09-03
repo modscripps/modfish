@@ -9,8 +9,11 @@ cast-tagged; `gps`/`alti` are carried through unchanged. See
 `plans/2026-09-01-fctd-pipeline-design.md` for the stage order and
 rationale.
 
-Whether `t`/`c` should be renamed to something more descriptive is an open
-question for the T-C correction analysis (FCTD reprocessing sub-project 3).
+`t`/`c` keep their names. The T-C correction analysis settled that question
+(FCTD reprocessing sub-project 3, design decision 9). The fitted correction
+parameters live in the cruise config (`fctd.params.tc` in motive-cruise-proc
+`config.yml`) and the analysis is written up in that repo's
+`book/data/fctd_tc_correction.md`.
 """
 
 import dataclasses

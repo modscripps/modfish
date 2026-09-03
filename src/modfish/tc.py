@@ -274,9 +274,13 @@ def phase_correct(ds, N=128, f0=6.0, tcfit=None, return_spectra=False):
         Cut-off frequency [Hz] of the low-pass filter `1 / (1 + (f/f0)**6)`
         applied to `t`, `c` and `p`. Defaults to 6.0, the gvpy value, which
         was picked for 24 Hz data; increasing it filters less. The orphaned
-        copy of this code in `modfish.utils` used 9 with a stale comment. The
-        right value for 16 Hz FCTD data is an open question for the T-C
-        correction analysis (FCTD reprocessing sub-project 3).
+        copy of this code in `modfish.utils` used 9 with a stale comment.
+        `f0` was left untuned by the T-C correction analysis (FCTD
+        reprocessing sub-project 3, design decision 8), which kept
+        `phase_correct` as a diagnostic and moved the production correction
+        to `tc.correct`. The production parameters live in the cruise config
+        (`fctd.params.tc` in motive-cruise-proc `config.yml`), documented in
+        that repo's `book/data/fctd_tc_correction.md`.
     tcfit : tuple or None, optional
         Upper and lower pressure limit [dbar] of the range used for the phase
         fit. Overrides `ds.attrs["tcfit"]`. If neither is given, defaults from
@@ -774,8 +778,12 @@ def thermal_mass_correction(
         sampled `time` coordinate of dtype datetime64. The sampling interval
         is read from `time`, not assumed.
     alpha : float, optional
-        Amplitude of the thermal anomaly. Defaults to 0.03, the SBE Data
-        Processing manual value for the SBE49. See Notes for alternatives.
+        Amplitude of the thermal anomaly. Must be positive: it divides into
+        the filter coefficient `b = 1 - 2a/alpha`, so `alpha = 0` has no
+        meaning here and raises `ValueError`. To run no thermal-mass
+        correction, pass `thermal_mass=False` to `tc.correct`. Defaults to
+        0.03, the SBE Data Processing manual value for the SBE49. See Notes
+        for alternatives.
     beta : float, optional
         Inverse relaxation time constant [1/s] of the thermal anomaly.
         Defaults to 1/7 (SBE Data Processing manual). See Notes for
@@ -811,8 +819,11 @@ def thermal_mass_correction(
     fish-agnostic (for a 16 Hz record, `fn = 8`, matching the value gvpy
     hardcoded for the SBE49-on-FCTD case this was ported from).
 
-    Choosing `alpha` and `beta` is the subject of the T-C correction analysis
-    (FCTD reprocessing sub-project 3). Values seen in the wild:
+    `alpha` and `beta` are fitted per instrument in the cruise analysis (FCTD
+    reprocessing sub-project 3). For SBE49 serial 0537 the 2025 MOTIVE fit
+    gives `alpha` 0.010 and `beta` 1/12 per second, set in the cruise config
+    (`fctd.params.tc` in motive-cruise-proc `config.yml`) and documented in
+    that repo's `book/data/fctd_tc_correction.md`. Values seen in the wild:
 
     ======================================  =========  =========
     source                                  alpha      1/beta
@@ -835,6 +846,11 @@ def thermal_mass_correction(
 
     with `dT` the sample-to-sample temperature difference and `ctm` in S/m.
     """
+    if alpha <= 0:
+        raise ValueError(
+            "alpha must be positive; set thermal_mass=False to disable the "
+            "thermal-mass step"
+        )
     if dcdt not in ("sbe", "constant"):
         raise ValueError(f"dcdt must be 'sbe' or 'constant', got {dcdt!r}")
 
