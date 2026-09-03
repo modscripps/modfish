@@ -34,6 +34,11 @@
     `lag_tau_cost_map`, `salinity_roughness`, `downup_separation`,
     `rosette_rms`, and `thermal_mass_cost_map`, for fitting `lag`,
     `tau_t`, `alpha`, and `beta` against a deployment record.
+-   Added `utils.nsqfcn`, buoyancy frequency squared of one profile
+    after Gregg and Alford, ported from `gvpy.ocean` so that `modfish`
+    no longer depends on it. `io.add_n2` computes `n2` again, so
+    `load_fctd_grid` and `load_epsi_grid` carry it as they did before
+    the gvpy dependency was cut.
 
 ### Bug fixes
 -   The sampling rate every `modfish.tc` function derives from the time

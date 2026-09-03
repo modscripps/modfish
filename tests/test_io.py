@@ -30,6 +30,24 @@ def test_load_epsi_grid(rootdir):
     assert t0 == np.datetime64("2024-11-09T04:48:59.572897554")
 
 
+def test_load_fctd_grid_adds_n2(rootdir):
+    ds = modfish.io.load_fctd_grid(rootdir / "data/FCTDgrid.mat")
+    assert ds.n2.dims == ds.t.dims
+    n2 = ds.n2.values[np.isfinite(ds.n2.values)]
+    assert n2.size > 0.5 * np.isfinite(ds.t.values).sum()
+    assert np.median(n2) > 0
+    assert ds.n2.attrs["units"] == "s$^{-2}$"
+
+
+def test_load_epsi_grid_adds_n2_with_depth_only_pressure(rootdir):
+    ds = modfish.io.load_epsi_grid(rootdir / "data/Epsigrid.mat")
+    assert ds.p.dims == ("depth",)
+    assert ds.n2.dims == ds.t.dims
+    n2 = ds.n2.values[np.isfinite(ds.n2.values)]
+    assert n2.size > 0
+    assert np.median(n2) > 0
+
+
 RAW_MAT_2025 = pathlib.Path(
     "/mnt/mod-server/MOTIVE/Cruises/skq202521s/05_processed_data/"
     "25_1205_d07_FCTD1_FrontStation/fctd_mat/FCTD25_12_05_082141.mat"

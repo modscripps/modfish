@@ -3,10 +3,129 @@
 """Utilities"""
 
 from pathlib import Path
+
+import gsw
 import numpy as np
 import pandas as pd
 import scipy
 from munch import munchify
+from scipy.signal import filtfilt
+
+
+def nsqfcn(s, t, p, p0, dp, lon, lat):
+    r"""Buoyancy frequency squared of one profile, after Gregg and Alford.
+
+    Parameters
+    ----------
+    s : array_like
+        Practical salinity.
+    t : array_like
+        In-situ temperature [°C].
+    p : array_like
+        Pressure [dbar]. Either direction; an upward profile is flipped.
+    p0 : float
+        Lower bound (start) pressure of the output grid [dbar]. Raised in
+        steps of `dp` until it lies below the shallowest sample.
+    dp : float
+        Pressure interval of the output grid and low-pass length [dbar].
+    lon, lat : float
+        Position, for absolute salinity.
+
+    Returns
+    -------
+    n2 : np.ndarray
+        Buoyancy frequency squared [(rad/s)$^2$] at `pout`. Scalar NaN
+        when the profile has no usable sample, fewer samples than the
+        low-pass filter needs, or a low-passed pressure that is not
+        monotonic.
+    pout : np.ndarray
+        Pressure of the `n2` values [dbar], the midpoints of the `dp` grid.
+
+    Notes
+    -----
+    The function
+
+    1. drops samples with negative pressure or NaN in `s` or `t`, and
+       flips an upward profile,
+    2. low-pass filters `t`, `s` and `p` with a Hanning window of width
+       `dp`,
+    3. interpolates `t` and `s` onto `p0, p0 + dp, p0 + 2 dp, ...`,
+    4. computes the potential density of the upper and lower point of
+       each grid interval, referenced to the pressure halfway between
+       them,
+    5. converts the difference into
+
+    $$ N^2 = g \, \frac{\rho_l - \rho_u}{\Delta p \, \rho_u} $$
+
+    with $\Delta p$ in dbar, so $N^2$ carries the dbar-to-meter factor
+    (about 1 % at depth) as the Matlab original does. For $N$ in cycles
+    per second take $\sqrt{N^2} / (2 \pi)$, for the period in seconds
+    $2 \pi / \sqrt{N^2}$.
+
+    Adapted from `gvpy.ocean.nsqfcn`, a port of Gregg and Alford's Matlab
+    function, with these changes: the `sort` and `verbose` options are
+    gone, absolute salinity is computed from pressure (the gvpy port
+    passed temperature in its place), `g` is 9.80665 m/s$^2$, and an
+    empty or too-short profile returns NaN where the port raised.
+
+    Examples
+    --------
+    >>> p = np.arange(0, 1000.5, 0.5)
+    >>> n2, pout = nsqfcn(34 + p / 1000, 20 - 16 * p / 1000, p, p0=0, dp=10, lon=-125, lat=45)
+    >>> np.diff(pout)[:2]
+    array([10., 10.])
+    """
+    G = 9.80665
+
+    s = np.asarray(s, dtype=float)
+    t = np.asarray(t, dtype=float)
+    p = np.asarray(p, dtype=float)
+    keep = (p >= 0) & np.isfinite(s) & np.isfinite(t)
+    s, t, p = s[keep], t[keep], p[keep]
+    if p.size < 2:
+        return np.nan, np.nan
+
+    if p[-1] < p[0]:
+        s, t, p = s[::-1], t[::-1], p[::-1]
+
+    # Low pass over dp. A window of one sample or less means no filtering.
+    dp_med = np.median(np.diff(p))
+    if not dp_med > 0:
+        return np.nan, np.nan
+    nwin = int(2 * np.floor(dp / dp_med))
+    if nwin > 1:
+        if p.size <= 3 * nwin:  # filtfilt's default padlen
+            return np.nan, np.nan
+        b = np.hanning(nwin)
+        b = b / b.sum()
+        tlp = filtfilt(b, 1, t)
+        slp = filtfilt(b, 1, s)
+        plp = filtfilt(b, 1, p)
+    else:
+        tlp, slp, plp = t, s, p
+
+    if not np.all(np.diff(plp) >= 0):
+        return np.nan, np.nan
+    pmin, pmax = plp[0], plp[-1]
+
+    while p0 <= pmin:
+        p0 = p0 + dp
+
+    # End points of the N^2 windows and their midpoints.
+    pwin = np.arange(p0, pmax, dp)
+    if pwin.size < 2:
+        return np.nan, np.nan
+    t_ep = np.interp(pwin, plp, tlp)
+    s_ep = np.interp(pwin, plp, slp)
+    pout = pwin[:-1] + dp / 2
+
+    sa_u = gsw.SA_from_SP(s_ep[:-1], pwin[:-1], lon, lat)
+    pd_u = gsw.pot_rho_t_exact(sa_u, t_ep[:-1], pwin[:-1], pout)
+    sa_l = gsw.SA_from_SP(s_ep[1:], pwin[1:], lon, lat)
+    pd_l = gsw.pot_rho_t_exact(sa_l, t_ep[1:], pwin[1:], pout)
+
+    n2 = G * (pd_l - pd_u) / (dp * pd_u)
+    return n2, pout
 
 
 def sampling_interval(time) -> float:
