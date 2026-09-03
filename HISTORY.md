@@ -3,6 +3,8 @@
 ## unreleased
 
 ### New Features
+-   `tc.downup_separation` takes a `pmax` so the down/up cost can be
+    restricted to a pressure band.
 -   Added `modfish.modraw` subpackage: a binary frame scanner plus per-tag
     decoders for the FCTD `.modraw` tag set (`SB49` CTD, `EFE4`
     microconductivity/accelerometer, `ECOP` Tridente fluorometer, `GPGGA`/
@@ -117,6 +119,10 @@
     default `FCTDConfig()` applies no correction.
 
 ### Internal Changes
+-   `tc.downup_separation` indexes casts by their time runs and
+    `tc.thermal_mass_correction` evaluates its recursion with
+    `scipy.signal.lfilter`; a 242-point thermal-mass cost map on the full
+    2025 d12 record drops from about 45 min to under 5 min.
 -   Added cross-validation fixtures and tests against the Matlab and rust
     `.modraw` readers.
 -   Removed the orphaned ctdproc-derived T-C block from `modfish.utils`

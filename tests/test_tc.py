@@ -516,32 +516,29 @@ def test_find_lags_peak_at_lag_axis_end_does_not_raise():
     assert first == pytest.approx(-(window - 2) / fs)
 
 
-def test_downup_separation_zero_for_identical_down_up():
-    # two casts with mirrored p and identical T-S relation: the up cast is
-    # the exact time-reverse of the down cast, so every (t, c, p) triple
-    # (and therefore every (t, SP) pair) that occurs on the way down recurs
-    # on the way up; binning by temperature must then give the same mean SP
-    # per bin on both sides.
-    down = make_synthetic_ctd(minutes=4)
+def make_downup_pair(minutes=4, offset_up=0.0):
+    """One down cast and its exact time-reverse as the up cast.
+
+    `offset_up` adds a constant to `c` on the up cast so the separation is
+    nonzero and known in sign.
+    """
+    down = make_synthetic_ctd(minutes=minutes)
     n = down.sizes["time"]
     dt = down.time.data[1] - down.time.data[0]
-
     up_time = down.time.data[-1] + dt * (np.arange(n) + 1)
     full_time = np.concatenate([down.time.data, up_time])
     full_vars = {}
     for v in ["t", "c", "p", "lon", "lat"]:
         down_v = down[v].data
         full_vars[v] = np.concatenate([down_v, down_v[::-1]])
+    full_vars["c"][n:] += offset_up
     full_vars["dPdt"] = np.gradient(full_vars["p"]) * 16.0
-
     ds = xr.Dataset(
         coords=dict(time=("time", full_time)),
         data_vars={k: ("time", v) for k, v in full_vars.items()},
     )
-    SP = gsw.SP_from_C(10 * ds.c.data, ds.t.data, ds.p.data)
-    ds = ds.assign(SP=("time", SP))
+    ds = ds.assign(SP=("time", gsw.SP_from_C(10 * ds.c.data, ds.t.data, ds.p.data)))
     ds = ds.assign_coords(cast=("time", np.concatenate([np.full(n, 1), np.full(n, 2)])))
-
     casts = xr.Dataset(
         data_vars=dict(
             start_time=("cast", [full_time[0], full_time[n]]),
@@ -550,12 +547,51 @@ def test_downup_separation_zero_for_identical_down_up():
         ),
         coords=dict(cast=("cast", [1, 2])),
     )
-
     tbins = np.linspace(ds.t.min().item(), ds.t.max().item(), 20)
+    return ds, casts, tbins
+
+
+def test_downup_separation_zero_for_identical_down_up():
+    # two casts with mirrored p and identical T-S relation: the up cast is
+    # the exact time-reverse of the down cast, so every (t, c, p) triple
+    # (and therefore every (t, SP) pair) that occurs on the way down recurs
+    # on the way up; binning by temperature must then give the same mean SP
+    # per bin on both sides.
+    ds, casts, tbins = make_downup_pair()
     out = tc.downup_separation(ds, casts, tbins, pmin=1.0)
     assert out.sep.sizes["pair"] == 1
     assert float(out.sep.isel(pair=0)) == pytest.approx(0.0, abs=1e-9)
     assert out.attrs["mean"] == pytest.approx(0.0, abs=1e-9)
+
+
+def test_downup_separation_pmax_at_record_max_equals_unrestricted():
+    ds, casts, tbins = make_downup_pair(offset_up=0.01)
+    full = tc.downup_separation(ds, casts, tbins, pmin=1.0)
+    capped = tc.downup_separation(ds, casts, tbins, pmin=1.0, pmax=float(ds.p.max()) + 1)
+    assert capped.attrs["mean"] == pytest.approx(full.attrs["mean"], rel=1e-12)
+    assert full.attrs["mean"] > 0
+
+
+def test_downup_separation_pmax_below_pmin_gives_no_pairs():
+    ds, casts, tbins = make_downup_pair(offset_up=0.01)
+    out = tc.downup_separation(ds, casts, tbins, pmin=300.0, pmax=100.0)
+    assert out.sizes["pair"] == 0
+    assert np.isnan(out.attrs["mean"])
+
+
+def test_downup_separation_pmax_restricts_to_the_shallow_band():
+    # the offset is applied only below 300 dbar on the up cast; a pmax of
+    # 300 must then see no separation while the unrestricted cost does
+    ds, casts, tbins = make_downup_pair()
+    deep = ds.p.data > 300
+    c = ds.c.data.copy()
+    c[deep & (ds.cast.data == 2)] += 0.01
+    ds = ds.assign(c=("time", c))
+    ds = ds.assign(SP=("time", gsw.SP_from_C(10 * ds.c.data, ds.t.data, ds.p.data)))
+    shallow = tc.downup_separation(ds, casts, tbins, pmin=1.0, pmax=300.0)
+    full = tc.downup_separation(ds, casts, tbins, pmin=1.0)
+    assert shallow.attrs["mean"] == pytest.approx(0.0, abs=1e-9)
+    assert full.attrs["mean"] > 1e-4
 
 
 def test_rosette_rms_scales_with_offset():
