@@ -309,7 +309,7 @@ def load_fctd_raw_mat(file):
             ds[var] = (("time"), d[var])
 
     ds.p.attrs = dict(long_name="pressure", units="dbar")
-    ds.c.attrs = dict(long_name="conductivity", units="mS/cm")
+    ds.c.attrs = dict(long_name="conductivity", units="S/m")
     ds.t.attrs = dict(long_name="temperature", units="°C")
     if "chi" in ds:
         ds.chi.attrs = dict(long_name=r"$\chi$", units="K$^2$/s")
@@ -572,32 +572,44 @@ def plot_epsi_profile(prof):
 
 
 def add_n2(ds, dp=10):
-    # add N^2 calculation that does not depend on gvpy
+    """Add buoyancy frequency squared to a gridded dataset.
+
+    Parameters
+    ----------
+    ds : xr.Dataset
+        Gridded profiles with `s`, `t`, `p`, `lon` and `lat`. `t` and `s`
+        span `depth` and `time` in either order; `p` may span both or
+        `depth` only; `lon` and `lat` are per `time`.
+    dp : float
+        Pressure interval and smoothing length passed to
+        `modfish.utils.nsqfcn` [dbar]. Defaults to 10.
+
+    Returns
+    -------
+    xr.Dataset
+        `ds` with `n2` [s$^{-2}$] on the dims of `t`, interpolated from
+        the `dp` grid back onto each profile's pressure. NaN where the
+        profile pressure lies outside the `dp` grid, and through a whole
+        profile that `nsqfcn` returns NaN for (no usable samples, fewer
+        samples than the filter needs, or non-monotonic low-passed
+        pressure) or whose position is NaN.
+    """
+    n2 = np.full(ds.t.shape, np.nan)
+    time_axis = ds.t.dims.index("time")
+    for i in range(ds.sizes["time"]):
+        dsi = ds.isel(time=i)
+        p = np.broadcast_to(dsi.p.data, dsi.t.shape)
+        n2i, midp = modfish.utils.nsqfcn(
+            dsi.s.data, dsi.t.data, p, p0=0, dp=dp,
+            lon=float(dsi.lon), lat=float(dsi.lat),
+        )
+        if np.ndim(n2i) == 0:
+            continue
+        np.moveaxis(n2, time_axis, 0)[i] = np.interp(
+            p, midp, n2i, left=np.nan, right=np.nan
+        )
+    ds["n2"] = (ds.t.dims, n2)
+    ds.n2.attrs = dict(
+        long_name=r"N$^2$", units=r"s$^{-2}$", comment=f"smoothed over {dp} dbar"
+    )
     return ds
-    # # calculate buoyancy frequency
-    # ds["n2"] = ds.t.copy() * np.nan
-    # ds.n2.attrs = dict(
-    #     long_name=r"N$^2$", units=r"s$^{-2}$", info=f"smoothed over {dp} dbar"
-    # )
-    # for i in range(len(ds.time)):
-    #     dsi = ds.isel(time=i)
-    #     # dsi = dsi.dropna("depth", how="any", subset=["t", "s", "p"])
-    #     try:
-    #         n2, midp = gv.ocean.nsqfcn(
-    #             dsi.s.data,
-    #             dsi.t.data,
-    #             dsi.p.data,
-    #             p0=0,
-    #             dp=dp,
-    #             lon=dsi.lon.data,
-    #             lat=dsi.lat.data,
-    #         )
-    #         n2i = scipy.interpolate.interp1d(midp, n2, bounds_error=False)(dsi.p.data)
-    #         shape = ds.t.shape
-    #         if len(ds.time) == shape[0]:
-    #             ds.n2.data[i, :] = n2i
-    #         elif len(ds.time) == shape[1]:
-    #             ds.n2.data[:, i] = n2i
-    #     except:
-    #         pass
-    # return ds

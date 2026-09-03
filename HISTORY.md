@@ -34,6 +34,11 @@
     `lag_tau_cost_map`, `salinity_roughness`, `downup_separation`,
     `rosette_rms`, and `thermal_mass_cost_map`, for fitting `lag`,
     `tau_t`, `alpha`, and `beta` against a deployment record.
+-   Added `utils.nsqfcn`, buoyancy frequency squared of one profile
+    after Gregg and Alford, ported from `gvpy.ocean` so that `modfish`
+    no longer depends on it. `io.add_n2` computes `n2` again, so
+    `load_fctd_grid` and `load_epsi_grid` carry it as they did before
+    the gvpy dependency was cut.
 
 ### Bug fixes
 -   The sampling rate every `modfish.tc` function derives from the time
@@ -58,6 +63,10 @@
     cast) wrapped into a discontinuity that the fractional-delay sinc
     kernel rang on through the whole record, distorting the
     salinity-roughness cost used to fit `lag` and `tau_t`.
+-   `io.load_fctd_raw_mat` labels `c` as S/m. The attr read mS/cm while
+    the values were S/m (a median of 3.3 S/m on files from both MOTIVE
+    cruises, giving a practical salinity of 34.5 when read as S/m),
+    which `modfish.modraw` had labelled correctly all along.
 -   `find_lags` no longer raises `IndexError` when a window's correlation
     peak lands on the first or last lag of the correlation array. The
     sub-sample quadratic refinement needs a neighbor on each side of the
