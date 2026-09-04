@@ -69,14 +69,17 @@ def header_setup(head):
     -------
     setup : dict
         Survey, vehicle, instrument serial number and the like. Keys are
-        lowercased and stripped of their `CTD.` prefix.
+        lowercased and stripped of their `CTD.` prefix. Lines beginning with
+        `%` (Matlab comments) are skipped, since 2024 headers carry a
+        commented enumeration of candidate values ahead of the active
+        assignment.
     """
     setup = {}
     for key in ("survey", "experiment", "cruise", "vehicle", "fishflag", "SerialNum"):
-        m = re.search(rf"CTD\.{key}\s*=\s*'([^']*)'", head)
+        m = re.search(rf"^[ \t]*CTD\.{key}\s*=\s*'([^']*)'", head, re.MULTILINE)
         if m:
             setup[key.lower()] = m.group(1)
-    m = re.search(r"GM_TIME\s*=\s*'([^']+)'", head)
+    m = re.search(r"^[ \t]*GM_TIME\s*=\s*'([^']+)'", head, re.MULTILINE)
     if m:
         setup["gm_time"] = m.group(1)
     return setup
