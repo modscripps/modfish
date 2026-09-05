@@ -66,3 +66,21 @@ def test_fraction_table_monotone_in_eps():
     assert i <= 2
     assert np.all(np.diff(col[i:]) <= 0)
     assert col[0] > 0.9
+
+
+def test_pipeline_table_resolves_the_band_edge_above_the_cap():
+    """`integrate` returns `k_last + dk/2`, up to half a Welch bin above
+    `kmax_cap`, so the pipeline's table must resolve that instead of
+    clamping `r_of` back to the cap."""
+    from modfish.chi.config import ChiParams
+    from modfish.chi.pipeline import _fraction_table
+
+    params = ChiParams(enabled=True, gain=50.0)
+    table = _fraction_table(params)
+    assert table.kmax_grid[-1] == pytest.approx(
+        params.kmax_cap + 0.5 / (params.nsec * params.min_spd))
+    assert np.diff(table.kmax_grid).max() == pytest.approx(0.5, abs=0.05)
+    edge = table.r_of(12.77)
+    cap = table.r_of(12.5)
+    assert not np.allclose(edge, cap)
+    assert np.all(edge > cap)

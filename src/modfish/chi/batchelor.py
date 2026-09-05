@@ -99,7 +99,11 @@ class FractionTable:
         kmin : float
             Minimum wavenumber, cpm.
         kmax_max : float
-            Maximum wavenumber for kmax_grid, cpm.
+            Upper end of kmax_grid, cpm. The grid runs from `kmin + 0.5`
+            (the narrowest band worth tabulating) to `kmax_max` and
+            `r_of` clamps outside it, so pass the largest `kmax` the
+            caller can produce, not the nominal cap
+            (`modfish.chi.pipeline._fraction_table`).
         nu : float
             Kinematic viscosity, m^2/s.
         D : float

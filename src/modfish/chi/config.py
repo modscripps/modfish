@@ -8,13 +8,13 @@ FLAG_SLOW = 1  # fall rate below min_spd
 FLAG_NOISE = 2  # kmax set by the noise cut, below both caps
 FLAG_EMPTY = 4  # fewer than min_bins wavenumber bins survived
 FLAG_RCLIP = 8  # closure solve at an edge of the eps table (r held at the floor value below it, NaN above it)
-FLAG_N2 = 16  # n2 not positive, closure undefined
+FLAG_N2 = 16  # n2 finite and not positive, closure undefined; a NaN n2 gets bit 64 instead
 FLAG_RAIL = 32  # a c1 sample in the window sat at the ADC rail
-FLAG_NOENV = 64  # window center outside the ctd record or NaN environment
+FLAG_NOENV = 64  # no environment: window center outside the ctd record, a NaN c1 sample in the window, or a NaN closure input (n2, alpha, Rrho) under a finite chi
 FLAG_RRHO = 128  # (1 + 1/Rrho^2) capped at rrho_factor_max
 
 FLAG_MEANINGS = (
-    "1 slow, 2 noise_limited, 4 band_empty, 8 r_clipped, 16 n2_not_positive, "
+    "1 slow, 2 noise_limited, 4 band_empty, 8 eps_table_edge, 16 n2_not_positive, "
     "32 rail, 64 no_closure_inputs, 128 rrho_capped"
 )
 

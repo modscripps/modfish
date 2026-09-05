@@ -145,3 +145,48 @@ def test_chi_pe_scales_as_alpha_squared(table):
     doubled = closure(chi, kmax, strat2, P, table)
     assert np.isfinite(base.chi_pe.values).all()
     assert doubled.chi_pe.values == pytest.approx(4.0 * base.chi_pe.values, rel=1e-12)
+
+
+def test_one_nan_does_not_void_the_boxcar():
+    """A single missing sgth0 sample leaves n2 finite at every center."""
+    ctd = _ctd(tz=-0.01)
+    centers = ctd.time.values[16 * 60 : 16 * 240 : 16 * 10]
+    base = stratification(ctd, centers, P)
+    holed = ctd.copy()
+    sgth0 = ctd["sgth0"].values.copy()
+    sgth0[sgth0.size // 2] = np.nan
+    holed["sgth0"] = ("time", sgth0)
+    one = stratification(holed, centers, P)
+    assert np.isfinite(one.n2.values).all()
+    assert one.n2.values == pytest.approx(base.n2.values, rel=0.01)
+
+
+def test_nan_stretch_longer_than_the_window_gives_nan_n2():
+    """Past half the boxcar invalid, the mean is NaN rather than biased."""
+    ctd = _ctd(tz=-0.01)
+    size = max(int(round(P.closure_window * 16.0)), 3)
+    mid = ctd.sizes["time"] // 2
+    holed = ctd.copy()
+    sgth0 = ctd["sgth0"].values.copy()
+    sgth0[mid - size : mid + size] = np.nan
+    holed["sgth0"] = ("time", sgth0)
+    out = stratification(holed, ctd.time.values[[mid]], P)
+    assert np.isnan(out.n2.values[0])
+
+
+def test_nan_n2_is_not_flagged_as_inverted(table):
+    """Bit 16 means a measured n2 <= 0; a NaN n2 leaves it clear so that
+    `chi_dataset` can mark the window as missing environment (bit 64)."""
+    ctd = _ctd(tz=-0.01)
+    centers = ctd.time.values[16 * 60 : 16 * 240 : 16 * 10]
+    strat = stratification(ctd, centers, P)
+    n2 = strat["n2"].values.copy()
+    n2[0] = np.nan
+    n2[1] = -1e-6
+    strat = strat.copy()
+    strat["n2"] = ("time", n2)
+    chi = np.full(centers.size, 6e-11)
+    out = closure(chi, np.full(centers.size, 12.5), strat, P, table)
+    assert out.flag.values[0] == 0
+    assert np.isnan(out.chi_pe.values[0]) and np.isnan(out.eps_chi.values[0])
+    assert out.flag.values[1] & FLAG_N2

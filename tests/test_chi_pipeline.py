@@ -3,7 +3,9 @@ import pytest
 import xarray as xr
 
 from modfish.chi import add_chi
-from modfish.chi.config import FLAG_MEANINGS, ChiParams
+from modfish.chi.config import FLAG_MEANINGS, FLAG_N2, FLAG_NOENV, ChiParams
+from modfish.chi.load import load_c1
+from modfish.chi.pipeline import chi_dataset
 from modfish.fctd.concat import concat_l0
 from modfish.fctd.config import FCTDConfig
 from modfish.fctd.l1 import make_l1
@@ -59,3 +61,21 @@ def test_add_chi_requires_enabled_params(l1_and_files):
     l1, files = l1_and_files
     with pytest.raises(ValueError, match="gain"):
         add_chi(l1, files, ChiParams())
+
+
+def test_nan_closure_input_flags_no_environment(l1_and_files):
+    """A window with a spectrum but a NaN closure input reads as missing
+    environment (bit 64), not as inverted stratification (bit 16)."""
+    l1, files = l1_and_files
+    params = ChiParams(enabled=True, gain=50.0)
+    c1, ranges = load_c1(files, gap=params.gap)
+    ctd = l1["ctd"].to_dataset()
+    sgth0 = ctd["sgth0"].values.copy()
+    lo = sgth0.size // 3
+    sgth0[lo : lo + 16 * 120] = np.nan  # 2 min, wider than closure_window
+    ctd["sgth0"] = ("time", sgth0)
+    ds = chi_dataset(ctd, l1["casts"].to_dataset(), c1, ranges, params)
+    hit = np.isnan(ds.n2.values) & np.isfinite(ds.chi.values)
+    assert hit.sum() > 10
+    assert np.all(ds.chi_flag.values[hit] & FLAG_NOENV)
+    assert not np.any(ds.chi_flag.values[hit] & FLAG_N2)

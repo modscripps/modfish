@@ -39,7 +39,7 @@ def test_defaults_match_spec():
 def test_flags_are_distinct_bits_and_documented():
     bits = [FLAG_SLOW, FLAG_NOISE, FLAG_EMPTY, FLAG_RRHO]
     assert bits == [1, 2, 4, 128]
-    for word in ("slow", "noise_limited", "band_empty", "r_clipped", "n2_not_positive",
+    for word in ("slow", "noise_limited", "band_empty", "eps_table_edge", "n2_not_positive",
                  "rail", "no_closure_inputs", "rrho_capped"):
         assert word in FLAG_MEANINGS
 

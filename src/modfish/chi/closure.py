@@ -47,7 +47,21 @@ def stratification(ctd: xr.Dataset, centers, params: ChiParams) -> xr.Dataset:
     centers_ns = np.asarray(centers).astype("datetime64[ns]").astype("int64")
 
     def smooth(name):
-        return uniform_filter1d(ctd[name].values.astype(float), size, mode="nearest")
+        """Boxcar mean over `size` samples, NaN-aware.
+
+        The values are filtered with NaN replaced by zero and the validity
+        mask with the same window; a center whose window is less than half
+        valid returns NaN. A plain `uniform_filter1d` spreads one missing
+        L1 sample over the whole `closure_window`, costing about 125
+        windows of stratification.
+        """
+        v = ctd[name].values.astype(float)
+        ok = np.isfinite(v)
+        num = uniform_filter1d(np.where(ok, v, 0.0), size, mode="nearest")
+        den = uniform_filter1d(ok.astype(float), size, mode="nearest")
+        with np.errstate(divide="ignore", invalid="ignore"):
+            mean = num / den
+        return np.where(den < 0.5, np.nan, mean)
 
     ps, ts, SPs, sg = smooth("p"), smooth("t"), smooth("SP"), smooth("sgth0")
     dp = np.gradient(ps)
@@ -168,8 +182,9 @@ def closure(chi, kmax, strat: xr.Dataset, params: ChiParams, table: FractionTabl
         (128) only). `FLAG_RCLIP` marks a window where the epsilon solve
         hit an edge of the eps table: below it `r` is held at the
         table's own floor value and `eps_chi` at the eps floor; above it
-        `eps_chi`, `r` and `chi_tot` are NaN. `FLAG_N2` marks
-        `n2 <= 0`, undefined closure. `FLAG_RRHO` marks a capped
+        `eps_chi`, `r` and `chi_tot` are NaN. `FLAG_N2` marks a finite
+        `n2 <= 0`, undefined closure; a NaN `n2` gives NaN outputs
+        without this bit (`chi_dataset` marks it `FLAG_NOENV`). `FLAG_RRHO` marks a capped
         `(1 + 1/Rrho^2)` factor (Rrho = 0 or the factor above
         `rrho_factor_max`); a NaN `Rrho` instead propagates as NaN
         `chi_pe`, `eps_chi` and `chi_tot` with no flag bit set here
@@ -196,7 +211,9 @@ def closure(chi, kmax, strat: xr.Dataset, params: ChiParams, table: FractionTabl
     capped = np.isinf(factor) | (np.isfinite(factor) & (factor > params.rrho_factor_max))
     factor = np.where(capped, params.rrho_factor_max, factor)
     flag[capped & np.isfinite(chi)] |= FLAG_RRHO
-    bad_n2 = ~(n2 > 0)
+    # only a measured, non-positive n2 is inverted stratification; a NaN n2
+    # is missing environment and stays for chi_dataset's FLAG_NOENV
+    bad_n2 = np.isfinite(n2) & (n2 <= 0)
     flag[bad_n2] |= FLAG_N2
     with np.errstate(divide="ignore", invalid="ignore"):
         chi_pe = (params.g * alpha) ** 2 * chi / n2 * factor

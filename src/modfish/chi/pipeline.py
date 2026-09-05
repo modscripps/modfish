@@ -36,6 +36,33 @@ def _interp_at(centers_ns, time_ns, values):
     return np.interp(centers_ns, time_ns, np.asarray(values, dtype=float), left=np.nan, right=np.nan)
 
 
+def _fraction_table(params: ChiParams) -> FractionTable:
+    """Batchelor band-fraction table over the kmax range `run_range` returns.
+
+    `integrate` reports the upper edge of the band it summed,
+    `k_last + dk/2`, so the recorded `kmax` exceeds `params.kmax_cap` by up
+    to half a Welch bin. The wavenumber bin width is `1 / (nsec * spd)` and
+    the widest bin comes from the slowest window the pipeline keeps, so the
+    table must reach `kmax_cap + 0.5 / (nsec * min_spd)` (14.5 cpm at the
+    defaults) or `r_of` clamps and evaluates `r` over a narrower band than
+    the sum, biasing `chi_tot` and the eps solve high by a few percent.
+
+    Parameters
+    ----------
+    params : ChiParams
+        Supplies `kmin`, `kmax_cap`, `nsec`, `min_spd`, `nu`, `D` and `q`.
+
+    Returns
+    -------
+    FractionTable
+        Grid from `kmin + 0.5` to that ceiling at about 0.5 cpm spacing.
+    """
+    kmax_max = params.kmax_cap + 0.5 / (params.nsec * params.min_spd)
+    n_kmax = max(int(round((kmax_max - params.kmin - 0.5) / 0.5)) + 1, 2)
+    return FractionTable.build(params.kmin, kmax_max, params.nu, params.D,
+                               params.q, n_kmax=n_kmax)
+
+
 def _label_casts(centers, casts: xr.Dataset):
     """Cast id of each window center, 0 outside every detected cast.
 
@@ -142,17 +169,22 @@ def chi_dataset(ctd: xr.Dataset, casts: xr.Dataset, c1, ranges: pd.DataFrame,
     ds = ds.assign_coords(cast=("time", _label_casts(ds["time"].values, casts)))
 
     if params.closure:
-        # Controller ruling: kmax_max = params.kmax_cap, not
-        # max(kmax_cap, fmax_cap / min_spd) -- run_range never returns a
-        # kmax above kmax_cap, so a wider grid only coarsens the r(eps,
-        # kmax) interpolation over the kmax range that is actually used.
-        table = FractionTable.build(params.kmin, params.kmax_cap,
-                                    params.nu, params.D, params.q)
+        # the table reaches half a Welch bin above kmax_cap because that is
+        # where run_range's band edge can land; see _fraction_table
+        table = _fraction_table(params)
         strat = stratification(ctd, ds["time"].values, params)
         clo = closure(ds["chi"].values, ds["kmax"].values, strat, params, table)
         ds = ds.assign(**{k: strat[k] for k in ("n2", "Tz", "Sz", "Rrho")},
                        chi_tot=clo["chi_tot"], eps_chi=clo["eps_chi"], r=clo["r"])
-        ds["chi_flag"] = ("time", (ds["chi_flag"].values | clo["flag"].values).astype(np.uint8))
+        flag = ds["chi_flag"].values | clo["flag"].values
+        # a window with a spectrum but no closure input is missing
+        # environment (bit 64), not inverted stratification (bit 16)
+        noenv = np.isfinite(ds["chi"].values) & ~(
+            np.isfinite(strat["n2"].values)
+            & np.isfinite(strat["alpha"].values)
+            & np.isfinite(strat["Rrho"].values))
+        flag[noenv] |= FLAG_NOENV
+        ds["chi_flag"] = ("time", flag.astype(np.uint8))
 
     ds["chi"].attrs = dict(long_name="temperature-gradient variance dissipation, resolved band", units="K^2/s")
     ds["kmax"].attrs = dict(long_name="upper integration limit", units="cpm")
