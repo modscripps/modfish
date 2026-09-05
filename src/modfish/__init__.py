@@ -7,7 +7,8 @@ Python package to work with data from FastCTD and Epsifish instruments devloped 
 Beyond reading legacy Matlab-gridded output, the package covers the raw-data side: `modraw`
 decodes FCTD `.modraw` files into per-stream NetCDF (L0), and `fctd` chains L0
 concatenation, cast detection, sensor corrections, and depth gridding into L1 and gridded
-products (`fctd.process_deployment`).
+products (`fctd.process_deployment`). `chi` computes microconductivity chi from the L0
+`efe/c1` stream and adds it to the L1 and gridded products.
 
 
 # Installation
@@ -39,5 +40,5 @@ __author__ = """Gunnar Voet"""
 __email__ = "gvoet@ucsd.edu"
 __version__ = importlib.metadata.version("modfish")
 
-__all__ = ["io", "fctd", "modraw", "tc", "utils"]
-from . import io, fctd, modraw, tc, utils
+__all__ = ["io", "fctd", "chi", "modraw", "tc", "utils"]
+from . import io, fctd, chi, modraw, tc, utils
