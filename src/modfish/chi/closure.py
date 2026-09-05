@@ -155,7 +155,7 @@ def closure(chi, kmax, strat: xr.Dataset, params: ChiParams, table: FractionTabl
         `stratification` output on dim `time`, with `n2`, `alpha` and
         `Rrho`; supplies the `time` coordinate of the returned Dataset.
     params : ChiParams
-        Supplies `g`, `rho_0`, `rrho_factor_max` and `gamma`.
+        Supplies `g`, `rrho_factor_max` and `gamma`.
     table : FractionTable
         Passed through to `solve_epsilon`.
 
@@ -174,6 +174,16 @@ def closure(chi, kmax, strat: xr.Dataset, params: ChiParams, table: FractionTabl
         `rrho_factor_max`); a NaN `Rrho` instead propagates as NaN
         `chi_pe`, `eps_chi` and `chi_tot` with no flag bit set here
         (missing environment is Task 7's `FLAG_NOENV`).
+
+    Notes
+    -----
+    The prefactor is `(g alpha)^2 / N^2`, not the `g alpha / rho_0` of the
+    paper's printed (A2): with (A4) `J_b = Gamma eps`, (A5)
+    `J_b = chi_pe / 2` and the Osborn-Cox balance
+    `K_T = K_rho = chi / (2 Tz^2)` at `N^2 = g alpha Tz`, one gets
+    `chi_pe = (g alpha)^2 chi / N^2`, which is W/kg. The printed form
+    equals this only where `g alpha rho_0` = 2, i.e. at alpha = 2e-4
+    [TK: confirm against the A&P 2000b appendix text].
     """
     chi = np.asarray(chi, dtype=float)
     n2 = strat["n2"].values
@@ -189,7 +199,7 @@ def closure(chi, kmax, strat: xr.Dataset, params: ChiParams, table: FractionTabl
     bad_n2 = ~(n2 > 0)
     flag[bad_n2] |= FLAG_N2
     with np.errstate(divide="ignore", invalid="ignore"):
-        chi_pe = params.g * alpha / params.rho_0 * chi / n2 * factor
+        chi_pe = (params.g * alpha) ** 2 * chi / n2 * factor
     chi_pe[bad_n2] = np.nan
     eps, r, clipped = solve_epsilon(chi_pe, kmax, table, params.gamma)
     flag[clipped] |= FLAG_RCLIP

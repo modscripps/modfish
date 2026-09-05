@@ -55,8 +55,12 @@ class ChiParams:
         s, boxcar over which n2, Tz, Sz are evaluated.
     rrho_factor_max : float
         Cap on (1 + 1/Rrho^2).
-    gamma, rho_0, g : float
-        Closure constants.
+    gamma, g : float
+        Closure constants (mixing efficiency, gravity).
+    rho_0 : float
+        kg/m^3, reference density. Used by `stratification` for
+        `n2 = (g / rho_0) d(sigma_0)/dp`; the closure prefactor is
+        `(g alpha)^2 / n2` and carries no `rho_0`.
     nu, D, q : float
         Batchelor constants (kinematic viscosity, thermal diffusivity,
         universal constant).

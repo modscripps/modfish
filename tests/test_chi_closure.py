@@ -99,7 +99,7 @@ def test_closure_outputs_and_flags(table):
     out = closure(chi, kmax, strat_cap, P, table)
     assert np.all(out.flag.values & FLAG_RRHO)
     assert np.all(out.chi_pe.values == pytest.approx(
-        P.g * strat.alpha.values / P.rho_0 * chi / strat.n2.values * P.rrho_factor_max))
+        (P.g * strat.alpha.values) ** 2 * chi / strat.n2.values * P.rrho_factor_max))
     # tiny chi_pe: r clipped at the table's own floor value
     out = closure(np.full(centers.size, 1e-20), kmax, strat, P, table)
     assert np.all(out.flag.values & FLAG_RCLIP)
@@ -129,4 +129,19 @@ def test_closure_nan_rrho_stays_nan_unflagged(table):
     assert out.flag.values[0] == 0
     assert out.flag.values[1] & FLAG_RRHO
     assert out.chi_pe.values[1] == pytest.approx(
-        P.g * strat.alpha.values[1] / P.rho_0 * chi[1] / strat.n2.values[1] * P.rrho_factor_max)
+        (P.g * strat.alpha.values[1]) ** 2 * chi[1] / strat.n2.values[1] * P.rrho_factor_max)
+
+
+def test_chi_pe_scales_as_alpha_squared(table):
+    """The (A2) prefactor is (g alpha)^2 / n2, so chi_pe goes as alpha^2."""
+    ctd = _ctd(tz=-0.01)
+    centers = ctd.time.values[16 * 60 : 16 * 240 : 16 * 10]
+    strat = stratification(ctd, centers, P)
+    chi = np.full(centers.size, 6e-11)
+    kmax = np.full(centers.size, 12.5)
+    base = closure(chi, kmax, strat, P, table)
+    strat2 = strat.copy()
+    strat2["alpha"] = ("time", 2.0 * strat["alpha"].values)
+    doubled = closure(chi, kmax, strat2, P, table)
+    assert np.isfinite(base.chi_pe.values).all()
+    assert doubled.chi_pe.values == pytest.approx(4.0 * base.chi_pe.values, rel=1e-12)
