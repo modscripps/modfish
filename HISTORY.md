@@ -56,7 +56,9 @@
     `fctd.add_chi_to_products` for existing L1 files. Every correction is a
     named PSD factor (inverse preemphasis, SOM sinc^4 antialias, spectral
     derivative); no time-domain filtering, no first difference, no `c`/`p`
-    constants. Design: `plans/2026-09-04-chi-design.md`.
+    constants. `gain` is S/m per volt of `c1`; the shipboard constant 22
+    is per ADC fraction, 8.8 on this scale. Design:
+    `plans/2026-09-04-chi-design.md`.
 
 ### Bug fixes
 -   `tc.correct`, `tc.response_correction` and `tc.thermal_mass_correction`

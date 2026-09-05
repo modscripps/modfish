@@ -147,3 +147,19 @@ def test_run_range_flags():
     assert np.all(out["flag"] & FLAG_NOISE)  # the cut fired below both caps
     out = run_range(x, FS, spd, np.full(nwin, np.nan), P)
     assert np.isnan(out["chi"]).all() and np.all(out["flag"] & 64)
+
+
+def test_run_range_checks_the_per_window_lengths():
+    """A mismatched environment array is a caller bug, not a silent
+    IndexError partway through the window loop."""
+    rng = np.random.default_rng(4)
+    n = int(10 * FS)
+    x = rng.normal(1.5, 1e-3, n)
+    starts, _ = window_slices(n, FS, P)
+    nwin = starts.size
+    spd = np.full(nwin, 3.0)
+    dt_dc = np.full(nwin, 10.0)
+    with pytest.raises(ValueError, match="one entry per window"):
+        run_range(x, FS, spd[:-1], dt_dc, P)
+    with pytest.raises(ValueError, match="one entry per window"):
+        run_range(x, FS, spd, dt_dc[:-1], P)

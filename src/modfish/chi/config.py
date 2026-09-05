@@ -28,8 +28,11 @@ class ChiParams:
     enabled : bool
         Run `add_chi` in `process_deployment`.
     gain : float or None
-        S/m per V, the fitted product of network scale and gain. Required
-        when enabled; no default so a missing fit fails loudly.
+        S/m per volt of `c1` (2.5 V full scale), the fitted product of
+        network scale and gain. The shipboard Matlab constant 22 and the
+        review's per-cast fits are per normalized ADC fraction; divide
+        those by 2.5 for this scale. Required when enabled; no default so
+        a missing fit fails loudly.
     gain_source : str
         Provenance stamped into the product attrs.
     antialias : str

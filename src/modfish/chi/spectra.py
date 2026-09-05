@@ -246,6 +246,11 @@ def run_range(c1, fs, spd, dtdc_val, params: ChiParams):
         `flag` : numpy.ndarray of uint8
             Per-window flag bits (see `modfish.chi.config`).
         One entry per window.
+
+    Raises
+    ------
+    ValueError
+        When `spd` or `dtdc_val` does not have one entry per window.
     """
     # the range stays in its input dtype (float32 from load_c1); each
     # window is cast on its own, so a 12 h single-range deployment does not
@@ -254,6 +259,10 @@ def run_range(c1, fs, spd, dtdc_val, params: ChiParams):
     starts, _ = window_slices(c1.size, fs, params)
     nw = int(round(params.window * fs))
     nwin = starts.size
+    if len(spd) != nwin or len(dtdc_val) != nwin:
+        raise ValueError(
+            f"spd ({len(spd)}) and dtdc_val ({len(dtdc_val)}) each need one "
+            f"entry per window ({nwin})")
     chi = np.full(nwin, np.nan)
     kmax_out = np.full(nwin, np.nan)
     n_bins = np.zeros(nwin, dtype=int)

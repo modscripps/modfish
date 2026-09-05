@@ -128,7 +128,17 @@ def add_chi_to_products(l1_path, l0_files, config: FCTDConfig, grid_path=None):
     ------
     ValueError
         From `add_chi` when `config.chi.enabled` is False or
-        `config.chi.gain` is None.
+        `config.chi.gain` is None, and propagated from `load_c1` when no
+        file carries a non-empty `efe/c1` or from `chi_dataset` when no
+        range yields a full window.
+    FileNotFoundError
+        Propagated from `load_c1` when a path in `l0_files` is missing.
+
+    Notes
+    -----
+    There is no rollback: the L1 is replaced before the grid is
+    recomputed, so a failure in the grid half leaves the new L1 in place
+    beside a grid without the chi bins. Rerun to recover.
     """
     l1_path = Path(l1_path)
     with xr.open_datatree(l1_path) as tree:

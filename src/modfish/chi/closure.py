@@ -89,8 +89,10 @@ def stratification(ctd: xr.Dataset, centers, params: ChiParams) -> xr.Dataset:
              alpha=("time", alpha), beta=("time", beta), Rrho=("time", Rrho)),
         coords=dict(time=np.asarray(centers).astype("datetime64[ns]")))
     out["n2"].attrs = dict(long_name="buoyancy frequency squared", units="1/s^2")
-    out["Tz"].attrs = dict(long_name="vertical temperature gradient", units="K/m")
-    out["Sz"].attrs = dict(long_name="vertical practical salinity gradient", units="1/m")
+    out["Tz"].attrs = dict(long_name="vertical temperature gradient", units="K/m",
+                           note="gradient per dbar, dbar taken as m")
+    out["Sz"].attrs = dict(long_name="vertical practical salinity gradient", units="1/m",
+                           note="gradient per dbar, dbar taken as m")
     out["alpha"].attrs = dict(long_name="thermal expansion coefficient", units="1/K")
     out["beta"].attrs = dict(long_name="haline contraction coefficient", units="kg/g")
     out["Rrho"].attrs = dict(long_name="density ratio alpha Tz / (beta Sz)", units="1")
@@ -192,12 +194,11 @@ def closure(chi, kmax, strat: xr.Dataset, params: ChiParams, table: FractionTabl
 
     Notes
     -----
-    The prefactor is `(g alpha)^2 / N^2`, not the `g alpha / rho_0` of the
-    paper's printed (A2): with (A4) `J_b = Gamma eps`, (A5)
-    `J_b = chi_pe / 2` and the Osborn-Cox balance
-    `K_T = K_rho = chi / (2 Tz^2)` at `N^2 = g alpha Tz`, one gets
-    `chi_pe = (g alpha)^2 chi / N^2`, which is W/kg. The printed form
-    equals this only where `g alpha rho_0` = 2, i.e. at alpha = 2e-4
+    The prefactor `(g alpha)^2 / n2` follows from the paper's own (A4)
+    `J_b = Gamma eps`, (A5) `J_b = chi_pe / 2` and the Osborn-Cox balance
+    `K_T = K_rho = chi / (2 Tz^2)` at `N^2 = g alpha Tz`, and carries
+    units of W/kg. The printed (A2) has `g alpha / rho_0`, which equals
+    this form only where `g alpha rho_0` = 2, i.e. at alpha = 2e-4
     [TK: confirm against the A&P 2000b appendix text].
     """
     chi = np.asarray(chi, dtype=float)

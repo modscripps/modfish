@@ -189,7 +189,8 @@ def chi_dataset(ctd: xr.Dataset, casts: xr.Dataset, c1, ranges: pd.DataFrame,
     ds["chi"].attrs = dict(long_name="temperature-gradient variance dissipation, resolved band", units="K^2/s")
     ds["kmax"].attrs = dict(long_name="upper integration limit", units="cpm")
     ds["spd"].attrs = dict(long_name="fall rate", units="m/s")
-    ds["depth"].attrs = dict(ctd["depth"].attrs)
+    for name in ("depth", "p", "lon", "lat"):
+        ds[name].attrs = dict(ctd[name].attrs)
     ds["chi_flag"].attrs = dict(long_name="quality flag bitmask", flag_meanings=FLAG_MEANINGS)
     attrs = {k: (v if v is not None else "") for k, v in vars(params).items()}
     attrs["flag_meanings"] = FLAG_MEANINGS

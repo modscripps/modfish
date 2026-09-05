@@ -3,7 +3,7 @@ range table.
 
 The EFE record timestamps are whole milliseconds while the ADC runs at
 3.072 ms (325.52 Hz on every file of both cruises), so the per-sample
-times are reconstructed per range as `start + n / fs` with `fs` from the
+times are reconstructed per range as `start + i / fs` with `fs` from the
 sample count over the range span. The timestamps serve only the range
 starts and the gap test.
 """

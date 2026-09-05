@@ -10,10 +10,10 @@ port does not: the first-difference attenuation (4.4 % at 12.5 cpm at
 12.5 cpm), the gsw-versus-SBE dTdC linearization (0.5 to 4.2 %, growing
 with depth), and the whole-range circular FFT at range edges (excluded
 here). Expected offset of the port above the column is therefore a few
-percent, well inside the 0.1 log10 tolerance. The coverage threshold below
-is 1000, not 2000: the chi window's 0.25 s step at this deployment's 3.6
-to 3.8 m/s fall rate advances about 0.9 m between estimates, so a ~347 s
-cast populates at most about 1400 of the 0.5 m bins.
+percent, well inside the 0.1 log10 tolerance. The coverage threshold is
+1000: the chi window's 0.25 s step at this deployment's 3.6 to 3.8 m/s
+fall rate advances about 0.9 m between estimates, so a ~347 s cast
+populates at most about 1400 of the 0.5 m bins.
 """
 
 import pathlib

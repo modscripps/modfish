@@ -3,6 +3,10 @@
 The estimator is the review's stage 3: the square root of the median ratio
 of the two conductivity-gradient spectra over 0.05 to 0.5 cpm, where both
 sensors resolve the signal.
+
+Scale: the gain is S/m per volt of `c1` (2.5 V full scale). The shipboard
+Matlab constant 22 and the review's per-cast fits are per normalized ADC
+fraction; divide those by 2.5 for this scale.
 """
 
 import dataclasses
@@ -53,8 +57,11 @@ def fit_gain(c_ctd, fs_ctd, c1, fs_c1, spd, params: ChiParams, band=(0.05, 0.5),
     Returns
     -------
     float
-        Gain, S/m per V, the square root of the median ratio of the two
-        corrected conductivity-gradient spectra over `band`.
+        Gain, S/m per volt of `c1` (2.5 V full scale), the square root of
+        the median ratio of the two corrected conductivity-gradient
+        spectra over `band`. The shipboard Matlab constant 22 and the
+        review's per-cast fits are per normalized ADC fraction; divide
+        those by 2.5 for this scale.
 
     Raises
     ------
