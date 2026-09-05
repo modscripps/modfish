@@ -10,6 +10,9 @@ rationale.
 import logging
 from pathlib import Path
 
+import xarray as xr
+
+from modfish.chi import add_chi
 from modfish.fctd.concat import concat_l0
 from modfish.fctd.config import FCTDConfig
 from modfish.fctd.grid import grid_casts
@@ -27,13 +30,14 @@ def process_deployment(
 ) -> tuple[Path, Path]:
     """Process one deployment's L0 files into L1 and gridded products.
 
-    Chains `concat_l0` -> `make_l1` -> `grid_casts` and writes both
-    resulting products to `outdir`.
+    Chains `concat_l0` -> `make_l1` -> `add_chi` (when `config.chi.enabled`)
+    -> `grid_casts` and writes both resulting products to `outdir`.
 
     Parameters
     ----------
     files : list of Path or str
-        Per-file L0 netCDF paths, passed to `concat_l0`.
+        Per-file L0 netCDF paths, passed to `concat_l0` and, when chi is
+        enabled, to `add_chi` as the `efe/c1` source.
     outdir : Path or str
         Output directory; created (with parents) if missing.
     name : str
@@ -41,7 +45,8 @@ def process_deployment(
         failure, named in the wrapped error message.
     config : FCTDConfig or None, optional
         Pipeline configuration. Defaults to `FCTDConfig()`. `config.groups`
-        selects which L0 groups `concat_l0` loads.
+        selects which L0 groups `concat_l0` loads; `config.chi` controls
+        whether `add_chi` runs.
     overwrite : bool, optional
         When False (default) and both output files already exist,
         processing is skipped and the existing paths are returned without
@@ -58,7 +63,8 @@ def process_deployment(
     ------
     ValueError
         Re-raised, with `name` added to the message, from any `ValueError`
-        raised by `make_l1` or `grid_casts` (e.g. zero casts detected).
+        raised by `make_l1`, `add_chi`, or `grid_casts` (e.g. zero casts
+        detected).
     """
     if config is None:
         config = FCTDConfig()
@@ -82,6 +88,8 @@ def process_deployment(
 
     try:
         l1_tree = make_l1(l0_tree, config)
+        if config.chi.enabled:
+            l1_tree = add_chi(l1_tree, files, config.chi)
         grid = grid_casts(l1_tree, config.grid)
     except ValueError as exc:
         raise ValueError(f"process_deployment({name}): {exc}") from exc
@@ -89,4 +97,61 @@ def process_deployment(
     l1_tree.to_netcdf(l1_path)
     grid.to_netcdf(grid_path)
 
+    return l1_path, grid_path
+
+
+def add_chi_to_products(l1_path, l0_files, config: FCTDConfig, grid_path=None):
+    """Add the `chi` group to an existing L1 file and regrid.
+
+    Reads the L1 tree fully into memory, runs `add_chi` with `config.chi`,
+    writes the result to a temporary file beside `l1_path` and replaces the
+    original; when `grid_path` is given the grid is recomputed with
+    `config.grid` and replaced the same way.
+
+    Parameters
+    ----------
+    l1_path : Path or str
+        Existing L1 product.
+    l0_files : sequence of Path
+        The deployment's L0 files (the `efe/c1` source).
+    config : FCTDConfig
+        `config.chi.enabled` must be True.
+    grid_path : Path or str or None, optional
+        Existing grid product to rewrite.
+
+    Returns
+    -------
+    tuple
+        `(l1_path, grid_path)` as Paths, `grid_path` None when not given.
+
+    Raises
+    ------
+    ValueError
+        From `add_chi` when `config.chi.enabled` is False or
+        `config.chi.gain` is None, and propagated from `load_c1` when no
+        file carries a non-empty `efe/c1` or from `chi_dataset` when no
+        range yields a full window.
+    FileNotFoundError
+        Propagated from `load_c1` when a path in `l0_files` is missing.
+
+    Notes
+    -----
+    There is no rollback: the L1 is replaced before the grid is
+    recomputed, so a failure in the grid half leaves the new L1 in place
+    beside a grid without the chi bins. Rerun to recover.
+    """
+    l1_path = Path(l1_path)
+    with xr.open_datatree(l1_path) as tree:
+        l1_tree = tree.load()
+    l1_tree = add_chi(l1_tree, l0_files, config.chi)
+    tmp = l1_path.with_suffix(".tmp.nc")
+    l1_tree.to_netcdf(tmp)
+    tmp.replace(l1_path)
+    if grid_path is None:
+        return l1_path, None
+    grid_path = Path(grid_path)
+    grid = grid_casts(l1_tree, config.grid)
+    tmp = grid_path.with_suffix(".tmp.nc")
+    grid.to_netcdf(tmp)
+    tmp.replace(grid_path)
     return l1_path, grid_path

@@ -5,6 +5,8 @@ from pathlib import Path
 
 import yaml
 
+from modfish.chi.config import ChiParams
+
 #: `tc` keys from before the T-C correction sub-project reshape (task 3);
 #: `FCTDConfig.from_dict` rejects them by name instead of falling through
 #: to the generic unknown-key error, so a stale cruise config fails loudly
@@ -102,6 +104,8 @@ class FCTDConfig:
         Temperature-conductivity correction parameters
     grid : GridParams
         Depth gridding parameters
+    chi : ChiParams
+        Microconductivity chi parameters
     latitude_fallback : float | None
         degrees_north, used, with a warning, when GPS is absent
     gps_max_gap : float
@@ -119,6 +123,7 @@ class FCTDConfig:
     casts: CastParams = dataclasses.field(default_factory=CastParams)
     tc: TCParams = dataclasses.field(default_factory=TCParams)
     grid: GridParams = dataclasses.field(default_factory=GridParams)
+    chi: ChiParams = dataclasses.field(default_factory=ChiParams)
     latitude_fallback: float | None = None  # used, with a warning, when GPS is absent
     gps_max_gap: float = 300.0  # s, max GPS gap to interpolate across
     dpdt_smooth: float = 1.0  # s, dPdt smoothing window
@@ -138,7 +143,7 @@ class FCTDConfig:
         Parameters
         ----------
         d : dict
-            Dictionary with optional keys: "casts", "tc", "grid", and any top-level fields.
+            Dictionary with optional keys: "casts", "tc", "grid", "chi", and any top-level fields.
 
         Returns
         -------
@@ -158,6 +163,7 @@ class FCTDConfig:
             "casts": (CastParams, {f.name for f in dataclasses.fields(CastParams)}),
             "tc": (TCParams, {f.name for f in dataclasses.fields(TCParams)}),
             "grid": (GridParams, {f.name for f in dataclasses.fields(GridParams)}),
+            "chi": (ChiParams, {f.name for f in dataclasses.fields(ChiParams)}),
         }
 
         fctd_config_fields = {f.name for f in dataclasses.fields(FCTDConfig)}

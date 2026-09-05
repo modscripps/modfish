@@ -13,6 +13,7 @@ rationale.
 import numpy as np
 import xarray as xr
 
+from modfish.chi.config import FLAG_EMPTY, FLAG_SLOW
 from modfish.fctd.config import GridParams
 
 #: `ctd` variables never gridded as data variables: positions (kept
@@ -87,6 +88,57 @@ def _bin_mean(depth: np.ndarray, values: np.ndarray, edges: np.ndarray) -> np.nd
     return means
 
 
+def _bin_geomean(depth: np.ndarray, values: np.ndarray, edges: np.ndarray) -> np.ndarray:
+    """Geometric bin mean of `values` by `depth` into the bins defined by `edges`.
+
+    `_bin_mean` of `log10(values)`, raised back to linear units. Non-positive
+    values (undefined log) are masked with NaN before binning, alongside the
+    NaN handling `_bin_mean` already applies.
+
+    Parameters
+    ----------
+    depth : np.ndarray
+        Per-sample depth, m.
+    values : np.ndarray
+        Per-sample values to average geometrically, same shape as `depth`.
+    edges : np.ndarray
+        Bin edges, m, length `n_bins + 1`.
+
+    Returns
+    -------
+    np.ndarray
+        Geometric bin means, length `len(edges) - 1`.
+    """
+    v = np.asarray(values, dtype=float)
+    logv = np.where(v > 0, np.log10(np.where(v > 0, v, 1.0)), np.nan)
+    return 10.0 ** _bin_mean(depth, logv, edges)
+
+
+def _bin_or(depth: np.ndarray, flags: np.ndarray, edges: np.ndarray) -> np.ndarray:
+    """Bitwise or of `flags` by `depth` into the bins defined by `edges`.
+
+    Parameters
+    ----------
+    depth : np.ndarray
+        Per-sample depth, m.
+    flags : np.ndarray
+        Per-sample uint8 flag bitmask, same shape as `depth`.
+    edges : np.ndarray
+        Bin edges, m, length `n_bins + 1`.
+
+    Returns
+    -------
+    np.ndarray
+        Bitwise-or of `flags` per bin, dtype uint8, length `len(edges) - 1`.
+        0 where the bin has no samples.
+    """
+    idx = np.digitize(depth, edges) - 1
+    out = np.zeros(edges.size - 1, dtype=np.uint8)
+    ok = (idx >= 0) & (idx < out.size) & np.isfinite(depth)
+    np.bitwise_or.at(out, idx[ok], flags[ok].astype(np.uint8))
+    return out
+
+
 def _mean_time(time: np.ndarray) -> np.datetime64:
     """Mean of a datetime64 array.
 
@@ -133,7 +185,13 @@ def grid_casts(l1: xr.DataTree, params: GridParams | None = None) -> xr.Dataset:
         variable). Coordinates: `depth` (bin centers, m), `cast` (ids from
         the `casts` group), `direction` (from `casts`), `time`/`lon`/`lat`
         (per-cast means over that cast's samples). Attrs copied from
-        `ctd`, plus `dz`.
+        `ctd`, plus `dz`. When the tree carries a `chi` group, `chi`,
+        `chi_tot`, `eps_chi` (geometric bin means), `r`, `kmax` (bin
+        means) and `chi_flag` (bitwise or) are added over `(depth,
+        cast)`. Windows flagged `FLAG_SLOW` or `FLAG_EMPTY` are excluded
+        from those bin means, but `chi_flag`'s bitwise-or still covers
+        every window, so a bin can carry those bits without them having
+        contributed to the mean.
     """
     if params is None:
         params = GridParams()
@@ -176,6 +234,37 @@ def grid_casts(l1: xr.DataTree, params: GridParams | None = None) -> xr.Dataset:
         mean_lon[j] = np.nanmean(lon_all[mask])
         mean_lat[j] = np.nanmean(lat_all[mask])
 
+    chi_grid = {}
+    if "chi" in l1.children:
+        chi = l1["chi"].to_dataset()
+        geo = [n for n in ("chi", "chi_tot", "eps_chi") if n in chi]
+        arith = [n for n in ("r", "kmax") if n in chi]
+        for name in geo + arith:
+            chi_grid[name] = np.full((n_depth, n_casts), np.nan)
+        chi_grid["chi_flag"] = np.zeros((n_depth, n_casts), dtype=np.uint8)
+        chi_cast = chi["cast"].values
+        chi_depth = chi["depth"].values
+        chi_flag_all = chi["chi_flag"].values
+        # Controller ruling: flags 1 (FLAG_SLOW) and 4 (FLAG_EMPTY)
+        # exclude a window from the means, but chi_flag's bitwise-or
+        # still covers every window of the cast, so a bin can carry
+        # those bits even though the flagged windows did not
+        # contribute to chi/chi_tot/eps_chi/r/kmax.
+        excluded = (chi_flag_all.astype(np.uint8) & (FLAG_SLOW | FLAG_EMPTY)) != 0
+        for j, cid in enumerate(cast_ids):
+            m = chi_cast == cid
+            if not m.any():
+                continue
+            d = chi_depth[m]
+            excl = excluded[m]
+            for name in geo:
+                vals = np.where(excl, np.nan, chi[name].values[m])
+                chi_grid[name][:, j] = _bin_geomean(d, vals, edges)
+            for name in arith:
+                vals = np.where(excl, np.nan, chi[name].values[m])
+                chi_grid[name][:, j] = _bin_mean(d, vals, edges)
+            chi_grid["chi_flag"][:, j] = _bin_or(d, chi_flag_all[m], edges)
+
     coords = {
         "depth": ("depth", centers),
         "cast": ("cast", cast_ids),
@@ -185,6 +274,8 @@ def grid_casts(l1: xr.DataTree, params: GridParams | None = None) -> xr.Dataset:
         "lat": ("cast", mean_lat),
     }
     data_vars = {name: (("depth", "cast"), gridded[name]) for name in grid_vars}
+    for name, arr in chi_grid.items():
+        data_vars[name] = (("depth", "cast"), arr)
 
     grid = xr.Dataset(data_vars=data_vars, coords=coords)
     for name in grid_vars:
@@ -195,5 +286,12 @@ def grid_casts(l1: xr.DataTree, params: GridParams | None = None) -> xr.Dataset:
 
     grid.attrs = dict(ctd.attrs)
     grid.attrs["dz"] = params.dz
+
+    if chi_grid:
+        chi = l1["chi"].to_dataset()
+        for name in chi_grid:
+            grid[name].attrs = dict(chi[name].attrs)
+        for key in ("gain", "gain_source", "antialias", "modfish_version"):
+            grid.attrs[f"chi_{key}"] = chi.attrs[key]
 
     return grid

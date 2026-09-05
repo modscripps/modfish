@@ -7,18 +7,21 @@ only in `process_deployment` and in the caller. See
 `plans/2026-09-01-fctd-pipeline-design.md` for the design.
 """
 
+from modfish.chi.config import ChiParams
 from modfish.fctd.casts import casts_to_dataset, find_casts, label_casts
 from modfish.fctd.concat import concat_l0
 from modfish.fctd.config import CastParams, FCTDConfig, GridParams, TCParams
 from modfish.fctd.grid import grid_casts
 from modfish.fctd.l1 import make_l1
-from modfish.fctd.pipeline import process_deployment
+from modfish.fctd.pipeline import add_chi_to_products, process_deployment
 
 __all__ = [
     "CastParams",
+    "ChiParams",
     "FCTDConfig",
     "GridParams",
     "TCParams",
+    "add_chi_to_products",
     "casts_to_dataset",
     "concat_l0",
     "find_casts",

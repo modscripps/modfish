@@ -46,6 +46,19 @@
     stream would not fit in memory can be processed for its CTD product
     alone. The L1 root attrs record the selection. Default unchanged:
     every group is loaded.
+-   Added `modfish.chi` subpackage: microconductivity chi from the L0
+    `efe/c1` stream (`add_chi`, a `/chi` group on 2 s windows at a 0.25 s
+    step: band-limited `chi`, `kmax`, flags) with the Alford and Pinkel
+    closure (`chi_tot`, `eps_chi`, resolved fraction `r` from the Batchelor
+    band fraction, in-situ `n2`, `Tz`, `Sz`, `Rrho`) as an optional stage,
+    the gain fit against the SBE 49 (`fit_gain`), a `ChiParams` section on
+    `FCTDConfig`, `grid_casts` binning of the chi group, and
+    `fctd.add_chi_to_products` for existing L1 files. Every correction is a
+    named PSD factor (inverse preemphasis, SOM sinc^4 antialias, spectral
+    derivative); no time-domain filtering, no first difference, no `c`/`p`
+    constants. `gain` is S/m per volt of `c1`; the shipboard constant 22
+    is per ADC fraction, 8.8 on this scale. Design:
+    `plans/2026-09-04-chi-design.md`.
 
 ### Bug fixes
 -   `tc.correct`, `tc.response_correction` and `tc.thermal_mass_correction`
