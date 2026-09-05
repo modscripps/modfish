@@ -13,7 +13,6 @@ import pandas as pd
 from scipy.signal import welch
 
 from modfish.chi.config import ChiParams
-from modfish.chi.load import range_time
 from modfish.chi.response import derivative
 from modfish.chi.spectra import correct_spectrum
 
@@ -123,13 +122,22 @@ def fit_gain_casts(ctd, c1, ranges: pd.DataFrame, casts, params: ChiParams, band
         depth = ctd["depth"].values[m]
         seconds = (t_ctd[m][-1] - t_ctd[m][0]).astype("int64") / 1e9
         spd = float(abs(depth[-1] - depth[0]) / seconds)
+        t0_ns = np.datetime64(t0, "ns").astype("int64")
+        t1_ns = np.datetime64(t1, "ns").astype("int64")
         for _, r in ranges.iterrows():
             if not np.isfinite(r.fs):
                 continue
-            tr = range_time(r.start, r.n, r.fs)
-            if tr[0] <= t0 and tr[-1] >= t1:
-                sel = (tr >= t0) & (tr <= t1)
-                seg = c1[int(r.i0):int(r.i0) + int(r.n)][sel]
+            # index arithmetic on the uniform range grid, not range_time:
+            # materializing the whole grid per cast is 680 MB on a
+            # single-range deployment
+            n_r, fs_r = int(r.n), float(r.fs)
+            start_ns = np.datetime64(r.start, "ns").astype("int64")
+            end_ns = start_ns + int(round((n_r - 1) / fs_r * 1e9))
+            if start_ns <= t0_ns and end_ns >= t1_ns:
+                j0 = int(np.clip(np.ceil((t0_ns - start_ns) / 1e9 * fs_r), 0, n_r - 1))
+                j1 = int(np.clip(np.floor((t1_ns - start_ns) / 1e9 * fs_r), 0, n_r - 1))
+                n_c1 = j1 - j0 + 1
+                seg = c1[int(r.i0) + j0:int(r.i0) + j1 + 1]
                 c_ctd_vals = ctd["c"].values[m]
                 if np.isnan(c_ctd_vals).any() or np.isnan(seg).any():
                     logger.warning(
@@ -138,10 +146,10 @@ def fit_gain_casts(ctd, c1, ranges: pd.DataFrame, casts, params: ChiParams, band
                     )
                     break
                 try:
-                    g = fit_gain(c_ctd_vals, fs_ctd, seg, float(r.fs), spd, params, band)
+                    g = fit_gain(c_ctd_vals, fs_ctd, seg, fs_r, spd, params, band)
                 except ValueError as exc:
                     logger.warning("fit_gain_casts: skipping cast %s, %s", cid, exc)
                     break
-                rows.append(dict(cast=int(cid), gain=g, spd=spd, n_ctd=int(m.sum()), n_c1=int(sel.sum())))
+                rows.append(dict(cast=int(cid), gain=g, spd=spd, n_ctd=int(m.sum()), n_c1=n_c1))
                 break
     return pd.DataFrame(rows, columns=["cast", "gain", "spd", "n_ctd", "n_c1"])

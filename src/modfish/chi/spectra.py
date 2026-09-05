@@ -247,7 +247,10 @@ def run_range(c1, fs, spd, dtdc_val, params: ChiParams):
             Per-window flag bits (see `modfish.chi.config`).
         One entry per window.
     """
-    c1 = np.asarray(c1, dtype=float)
+    # the range stays in its input dtype (float32 from load_c1); each
+    # window is cast on its own, so a 12 h single-range deployment does not
+    # carry a 680 MB float64 copy beside the column
+    c1 = np.asarray(c1)
     starts, _ = window_slices(c1.size, fs, params)
     nw = int(round(params.window * fs))
     nwin = starts.size
@@ -256,7 +259,7 @@ def run_range(c1, fs, spd, dtdc_val, params: ChiParams):
     n_bins = np.zeros(nwin, dtype=int)
     flag = np.zeros(nwin, dtype=np.uint8)
     for j, i0 in enumerate(starts):
-        x = c1[i0:i0 + nw]
+        x = np.asarray(c1[i0:i0 + nw], dtype=float)
         if np.any(x <= params.rail_lo) or np.any(x >= params.rail_hi):
             flag[j] |= FLAG_RAIL
         s = spd[j]

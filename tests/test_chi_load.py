@@ -97,3 +97,33 @@ def test_nonexistent_file_raises(tmp_path):
     nonexistent = tmp_path / "does_not_exist.nc"
     with pytest.raises(FileNotFoundError):
         load_c1([nonexistent])
+
+
+def test_gap_inside_one_file_opens_a_new_range(tmp_path):
+    """Interior gaps are found on the file's own timestamps, so one file
+    can produce two ranges."""
+    rng = np.random.default_rng(1)
+    n = 500
+    t = np.round(1_700_000_000_000 + np.arange(n) * DT_MS).astype("int64")
+    t[n // 2 :] += 5000  # 5 s hole in the middle of the file
+    efe = xr.Dataset({"c1": ("time", rng.normal(1.5, 0.01, n))},
+                     coords={"time": t.astype("datetime64[ms]").astype("datetime64[ns]")})
+    path = tmp_path / "gapped.nc"
+    xr.DataTree.from_dict({"/efe": efe}).to_netcdf(path)
+    c1, ranges = load_c1([path], gap=0.01)
+    assert c1.size == n
+    assert len(ranges) == 2
+    assert ranges.n.tolist() == [n // 2, n - n // 2]
+    assert ranges.i0.tolist() == [0, n // 2]
+    assert np.all(ranges.fs.values == pytest.approx(1000 / DT_MS, rel=5e-3))
+    assert ranges.start.iloc[1] == t[n // 2].astype("datetime64[ms]").astype("datetime64[ns]")
+
+
+def test_range_spanning_two_files_keeps_one_fs(files):
+    """The overlap at b's start is dropped and the range carries across the
+    file boundary with a single fs."""
+    _, ranges = load_c1(files, gap=0.01)
+    first = ranges.iloc[0]
+    assert int(first.i0) == 0
+    assert int(first.n) == 2000 + 2000 - 3
+    assert first.fs == pytest.approx(1000 / DT_MS, rel=2e-3)
