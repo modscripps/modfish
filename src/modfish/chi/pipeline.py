@@ -10,7 +10,7 @@ from scipy.ndimage import uniform_filter1d
 from modfish.chi.batchelor import FractionTable
 from modfish.chi.closure import closure, stratification
 from modfish.chi.config import FLAG_MEANINGS, FLAG_NOENV, ChiParams
-from modfish.chi.load import load_c1, range_time
+from modfish.chi.load import load_c1
 from modfish.chi.spectra import dtdc, run_range, window_slices
 from modfish.utils import sampling_interval
 
@@ -117,8 +117,12 @@ def chi_dataset(ctd: xr.Dataset, casts: xr.Dataset, c1, ranges: pd.DataFrame,
         starts, centers_s = window_slices(int(r.n), float(r.fs), params)
         if starts.size == 0:
             continue
-        t_range = range_time(r.start, r.n, r.fs)
-        centers_ns = t_range[0].astype("int64") + np.round(centers_s * 1e9).astype("int64")
+        # Only the range start is needed here (element 0 of range_time's
+        # full per-sample grid, by construction); building that whole
+        # grid just to read one scalar is a multi-hundred-MB transient
+        # on a single-range 12 h deployment at 320 Hz.
+        start_ns = np.datetime64(r.start, "ns").astype("int64")
+        centers_ns = start_ns + np.round(centers_s * 1e9).astype("int64")
         env = {name: _interp_at(centers_ns, time_ns, ctd[name].values)
                for name in ("depth", "p", "lon", "lat", "t", "SP")}
         spd = _interp_at(centers_ns, time_ns, spd16)

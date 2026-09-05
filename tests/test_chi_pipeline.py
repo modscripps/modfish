@@ -36,6 +36,9 @@ def test_add_chi_builds_group(l1_and_files):
     assert chi.attrs["flag_meanings"] == FLAG_MEANINGS
     assert "modfish_version" in chi.attrs and chi.attrs["n_ranges"] >= 1
     assert set(np.unique(chi.cast.values)) - {0} == set(out["casts"].to_dataset().cast.values)
+    efe0 = xr.open_dataset(files[0], group="efe")
+    expected_t0 = efe0["time"].values[0] + np.timedelta64(int(params.window / 2 * 1e9), "ns")
+    assert chi.time.values[0] == expected_t0
 
 
 def test_add_chi_windows_inside_casts_have_speed_and_depth(l1_and_files):
