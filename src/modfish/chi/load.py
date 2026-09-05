@@ -39,14 +39,15 @@ def load_c1(files, gap=0.01):
     ------
     ValueError
         When no file carries a non-empty `efe/c1`.
+    FileNotFoundError
+        When a file in `files` does not exist.
     """
     times, values = [], []
     for f in files:
-        try:
-            ds = xr.open_dataset(Path(f), group="efe")
-        except (OSError, KeyError, ValueError):
-            continue
-        with ds:
+        with xr.open_datatree(Path(f)) as tree:
+            if "efe" not in tree.children:
+                continue
+            ds = tree["efe"].to_dataset()
             if "c1" not in ds or ds.sizes.get("time", 0) == 0:
                 continue
             times.append(ds["time"].values.astype("datetime64[ns]").astype("int64"))
@@ -83,13 +84,25 @@ def range_time(start, n, fs):
     n : int
         Number of samples in the range.
     fs : float
-        Sampling frequency in Hz.
+        Sampling frequency in Hz. Must be finite and positive when n > 1.
 
     Returns
     -------
     numpy.ndarray
         datetime64[ns] array of uniform timestamps.
+
+    Raises
+    ------
+    ValueError
+        When n > 1 and fs is not finite or not positive.
     """
+    n = int(n)
+    if n <= 1:
+        return np.array([np.datetime64(start, "ns")])
+    if not np.isfinite(fs) or fs <= 0:
+        raise ValueError(
+            f"fs must be finite and positive when n > 1, got fs={fs}"
+        )
     start_ns = np.datetime64(start, "ns").astype("int64")
-    offsets = np.round(np.arange(int(n)) / float(fs) * 1e9).astype("int64")
+    offsets = np.round(np.arange(n) / float(fs) * 1e9).astype("int64")
     return (start_ns + offsets).astype("datetime64[ns]")

@@ -74,3 +74,26 @@ def test_files_without_efe_are_skipped(tmp_path, files):
 def test_no_data_raises(tmp_path):
     with pytest.raises(ValueError, match="no efe/c1"):
         load_c1([])
+
+
+def test_range_time_with_n_equals_1():
+    start = np.datetime64("2024-01-01T00:00:00", "ns")
+    t = range_time(start, 1, np.nan)
+    assert len(t) == 1
+    assert t[0] == start
+
+
+def test_range_time_with_invalid_fs(files):
+    _, ranges = load_c1(files)
+    # Create a range with n > 1 and fs = NaN (would happen if span is 0)
+    # But in normal operation, ranges with n > 1 always have valid fs.
+    # Test the error case explicitly:
+    start = np.datetime64("2024-01-01T00:00:00", "ns")
+    with pytest.raises(ValueError, match="fs must be finite and positive"):
+        range_time(start, 5, np.nan)
+
+
+def test_nonexistent_file_raises(tmp_path):
+    nonexistent = tmp_path / "does_not_exist.nc"
+    with pytest.raises(FileNotFoundError):
+        load_c1([nonexistent])
