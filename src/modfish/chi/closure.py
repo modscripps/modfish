@@ -104,11 +104,17 @@ def solve_epsilon(chi_pe_hat, kmax, table: FractionTable, gamma):
     Returns
     -------
     eps, r : numpy.ndarray
-        W/kg and the resolved fraction (clipped at 1); NaN where the input
-        is NaN or not positive.
+        W/kg and the resolved fraction. In the interior of the table
+        (`g[0] < x < g[-1]`), both are log-log interpolated from the
+        table and `clipped` is False. Below the table (`x <= g[0]`),
+        `eps` is `table.eps_grid[0]` and `r` is the table's own floor
+        value `r_of(kmax)[0]` (never 1). Above the table (`x >= g[-1]`),
+        both are NaN: the closure cannot be inverted there. NaN where the
+        input is NaN or not positive.
     clipped : numpy.ndarray of bool
-        True where `r` was clipped at 1, including inputs below the
-        table's range (`eps` at the grid floor, `r` = 1).
+        True where the solve hit an edge of the eps table (below or
+        above), so `eps` and/or `r` are pinned or undefined rather than
+        interpolated.
     """
     chi_pe_hat = np.asarray(chi_pe_hat, dtype=float)
     kmax = np.asarray(kmax, dtype=float)
@@ -123,17 +129,16 @@ def solve_epsilon(chi_pe_hat, kmax, table: FractionTable, gamma):
         r_col = table.r_of(kmax[j])
         g = 2 * gamma * table.eps_grid * r_col
         if x <= g[0]:
-            # below the table: the band resolves everything, r = 1, eps at the floor
-            eps[j], r[j], clipped[j] = table.eps_grid[0], 1.0, True
+            # below the table: hold eps at the floor and r at its own floor value
+            eps[j], r[j], clipped[j] = table.eps_grid[0], r_col[0], True
             continue
         if x >= g[-1]:
-            eps[j], r[j] = table.eps_grid[-1], r_col[-1]
+            # above the table: the closure cannot be inverted, flag it
+            clipped[j] = True
             continue
         le = np.interp(np.log10(x), np.log10(g), log_eps)
         eps[j] = 10**le
         r[j] = np.interp(le, log_eps, r_col)
-        if r[j] > 1.0:
-            r[j], clipped[j] = 1.0, True
     return eps, r, clipped
 
 
@@ -160,7 +165,15 @@ def closure(chi, kmax, strat: xr.Dataset, params: ChiParams, table: FractionTabl
         On dim `time`, with data variables `chi_pe` (W/kg), `eps_chi`
         (W/kg), `r` (dimensionless), `chi_tot` (K^2/s) and `flag`
         (uint8, bits `FLAG_RCLIP` (8), `FLAG_N2` (16) and `FLAG_RRHO`
-        (128) only).
+        (128) only). `FLAG_RCLIP` marks a window where the epsilon solve
+        hit an edge of the eps table: below it `r` is held at the
+        table's own floor value and `eps_chi` at the eps floor; above it
+        `eps_chi`, `r` and `chi_tot` are NaN. `FLAG_N2` marks
+        `n2 <= 0`, undefined closure. `FLAG_RRHO` marks a capped
+        `(1 + 1/Rrho^2)` factor (Rrho = 0 or the factor above
+        `rrho_factor_max`); a NaN `Rrho` instead propagates as NaN
+        `chi_pe`, `eps_chi` and `chi_tot` with no flag bit set here
+        (missing environment is Task 7's `FLAG_NOENV`).
     """
     chi = np.asarray(chi, dtype=float)
     n2 = strat["n2"].values
@@ -168,7 +181,9 @@ def closure(chi, kmax, strat: xr.Dataset, params: ChiParams, table: FractionTabl
     flag = np.zeros(chi.shape, dtype=np.uint8)
     with np.errstate(divide="ignore", invalid="ignore"):
         factor = 1.0 + 1.0 / strat["Rrho"].values ** 2
-    capped = ~np.isfinite(factor) | (factor > params.rrho_factor_max)
+    # a NaN Rrho (missing/unknown) stays NaN; only Rrho = 0 (factor = inf)
+    # or a finite factor above the cap gets capped and flagged
+    capped = np.isinf(factor) | (np.isfinite(factor) & (factor > params.rrho_factor_max))
     factor = np.where(capped, params.rrho_factor_max, factor)
     flag[capped & np.isfinite(chi)] |= FLAG_RRHO
     bad_n2 = ~(n2 > 0)

@@ -66,8 +66,16 @@ def test_solve_epsilon_matches_fixed_point(table):
 
 def test_solve_epsilon_clips_and_handles_nan(table):
     eps, r, clipped = solve_epsilon(np.array([1e-16, np.nan, -1.0]), np.full(3, 12.5), table, P.gamma)
-    assert clipped[0] and r[0] == 1.0 and eps[0] == table.eps_grid[0]
+    assert clipped[0] and r[0] == pytest.approx(table.r_of(12.5)[0]) and eps[0] == table.eps_grid[0]
     assert np.isnan(eps[1:]).all() and np.isnan(r[1:]).all()
+
+
+def test_solve_epsilon_above_table_is_nan_and_clipped(table):
+    r_col = table.r_of(12.5)
+    g_last = 2 * P.gamma * table.eps_grid[-1] * r_col[-1]
+    eps, r, clipped = solve_epsilon(np.array([1e3 * g_last]), np.full(1, 12.5), table, P.gamma)
+    assert clipped[0]
+    assert np.isnan(eps[0]) and np.isnan(r[0])
 
 
 def test_closure_outputs_and_flags(table):
@@ -92,6 +100,33 @@ def test_closure_outputs_and_flags(table):
     assert np.all(out.flag.values & FLAG_RRHO)
     assert np.all(out.chi_pe.values == pytest.approx(
         P.g * strat.alpha.values / P.rho_0 * chi / strat.n2.values * P.rrho_factor_max))
-    # tiny chi_pe: r clipped
+    # tiny chi_pe: r clipped at the table's own floor value
     out = closure(np.full(centers.size, 1e-20), kmax, strat, P, table)
-    assert np.all(out.flag.values & FLAG_RCLIP) and np.all(out.r.values == 1.0)
+    assert np.all(out.flag.values & FLAG_RCLIP)
+    assert np.all(out.r.values == pytest.approx(table.r_of(12.5)[0]))
+    # huge chi_pe: above the table, eps_chi and chi_tot are NaN, flagged
+    huge_chi = chi * 1e6
+    out = closure(huge_chi, kmax, strat, P, table)
+    assert np.all(out.flag.values & FLAG_RCLIP)
+    assert np.isnan(out.eps_chi.values).all() and np.isnan(out.chi_tot.values).all()
+
+
+def test_closure_nan_rrho_stays_nan_unflagged(table):
+    ctd = _ctd(tz=-0.01)
+    centers = ctd.time.values[16 * 60 : 16 * 240 : 16 * 10]
+    strat = stratification(ctd, centers, P)
+    chi = np.full(centers.size, 6e-11)
+    kmax = np.full(centers.size, 12.5)
+    strat_mixed = strat.copy()
+    Rrho = strat.Rrho.values.copy()
+    Rrho[0] = np.nan
+    Rrho[1] = 0.0
+    strat_mixed["Rrho"] = ("time", Rrho)
+    out = closure(chi, kmax, strat_mixed, P, table)
+    assert np.isnan(out.chi_pe.values[0])
+    assert np.isnan(out.eps_chi.values[0])
+    assert np.isnan(out.chi_tot.values[0])
+    assert out.flag.values[0] == 0
+    assert out.flag.values[1] & FLAG_RRHO
+    assert out.chi_pe.values[1] == pytest.approx(
+        P.g * strat.alpha.values[1] / P.rho_0 * chi[1] / strat.n2.values[1] * P.rrho_factor_max)
