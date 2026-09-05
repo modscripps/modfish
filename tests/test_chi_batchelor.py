@@ -16,6 +16,20 @@ def test_spectrum_integrates_to_chi_over_6D(eps):
     assert np.trapezoid(P, k) == pytest.approx(chi / (6 * D), rel=1e-3)
 
 
+def test_spectrum_accepts_scalar_k():
+    # spectrum should handle array_like k, including scalars
+    chi = 1e-9
+    eps = 1e-8
+    k_scalar = 5.0
+    P_scalar = spectrum(k_scalar, eps, chi, NU, D, Q)
+    # result should be finite and non-negative
+    assert np.isfinite(P_scalar)
+    assert P_scalar >= 0.0
+    # scalar result should match array result at same k
+    P_array = spectrum(np.array([k_scalar]), eps, chi, NU, D, Q)
+    assert P_scalar == pytest.approx(P_array[0])
+
+
 @pytest.mark.parametrize(
     "eps, expected",
     [(1e-10, 0.498), (1e-9, 0.224), (1e-8, 0.086), (1e-7, 0.030), (1e-6, 0.010)],

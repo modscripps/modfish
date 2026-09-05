@@ -36,12 +36,34 @@ def spectrum(k, eps, chi, nu, D, q):
     uppera = erfc(a / np.sqrt(2)) * np.sqrt(np.pi / 2)
     gfun = 2 * np.pi * a * (np.exp(-(a**2) / 2) - a * uppera)
     P = np.sqrt(q / 2) * (chi / kb / D) * gfun
-    P[P <= 0] = 0.0
-    return P
+    return np.where(P > 0, P, 0.0)
 
 
 def band_fraction(eps, kmin, kmax, nu, D, q, n=4001):
-    """Fraction of the Batchelor variance between `kmin` and `kmax` (cpm)."""
+    """Fraction of the Batchelor variance between kmin and kmax.
+
+    Parameters
+    ----------
+    eps : float
+        Dissipation rate, W/kg.
+    kmin : float
+        Minimum wavenumber, cpm.
+    kmax : float
+        Maximum wavenumber, cpm.
+    nu : float
+        Kinematic viscosity, m^2/s.
+    D : float
+        Thermal diffusivity, m^2/s.
+    q : float
+        Universal constant.
+    n : int, optional
+        Number of points for integration, default 4001.
+
+    Returns
+    -------
+    float
+        Fraction of variance in the band, dimensionless.
+    """
     k = np.linspace(kmin, kmax, n)
     return float(6 * D * np.trapezoid(spectrum(k, eps, 1.0, nu, D, q), k))
 
@@ -70,6 +92,35 @@ class FractionTable:
     @classmethod
     def build(cls, kmin, kmax_max, nu, D, q, n_eps=81, n_kmax=24,
               eps_min=1e-12, eps_max=1e-4):
+        """Build a FractionTable by evaluating band_fraction on a parameter grid.
+
+        Parameters
+        ----------
+        kmin : float
+            Minimum wavenumber, cpm.
+        kmax_max : float
+            Maximum wavenumber for kmax_grid, cpm.
+        nu : float
+            Kinematic viscosity, m^2/s.
+        D : float
+            Thermal diffusivity, m^2/s.
+        q : float
+            Universal constant.
+        n_eps : int, optional
+            Number of eps grid points, default 81.
+        n_kmax : int, optional
+            Number of kmax grid points, default 24.
+        eps_min : float, optional
+            Minimum eps for grid, W/kg, default 1e-12.
+        eps_max : float, optional
+            Maximum eps for grid, W/kg, default 1e-4.
+
+        Returns
+        -------
+        FractionTable
+            Table with eps_grid (log-spaced from eps_min to eps_max),
+            kmax_grid (linear from kmin + 0.5 to kmax_max), and r array.
+        """
         eps_grid = np.logspace(np.log10(eps_min), np.log10(eps_max), n_eps)
         kmax_grid = np.linspace(kmin + 0.5, kmax_max, n_kmax)
         r = np.empty((n_eps, n_kmax))
@@ -79,7 +130,19 @@ class FractionTable:
         return cls(eps_grid=eps_grid, kmax_grid=kmax_grid, r=r, kmin=kmin)
 
     def r_of(self, kmax):
-        """Column of `r` at `kmax`, linear in `kmax`, clamped to the grid."""
+        """Column of r at kmax, with linear interpolation clamped to grid.
+
+        Parameters
+        ----------
+        kmax : float
+            Wavenumber at which to interpolate, cpm.
+
+        Returns
+        -------
+        numpy.ndarray
+            Array of shape (eps_grid.size,) with r values interpolated
+            linearly in kmax, clamped to [kmax_grid[0], kmax_grid[-1]].
+        """
         kmax = float(np.clip(kmax, self.kmax_grid[0], self.kmax_grid[-1]))
         j = np.searchsorted(self.kmax_grid, kmax, side="right") - 1
         j = min(max(j, 0), self.kmax_grid.size - 2)
