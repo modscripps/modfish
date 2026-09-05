@@ -6,6 +6,7 @@ sensors resolve the signal.
 """
 
 import dataclasses
+import logging
 
 import numpy as np
 import pandas as pd
@@ -15,6 +16,8 @@ from modfish.chi.config import ChiParams
 from modfish.chi.load import range_time
 from modfish.chi.response import derivative
 from modfish.chi.spectra import correct_spectrum
+
+logger = logging.getLogger(__name__)
 
 
 def fit_gain(c_ctd, fs_ctd, c1, fs_c1, spd, params: ChiParams, band=(0.05, 0.5), nsec=16.0,
@@ -99,8 +102,13 @@ def fit_gain_casts(ctd, c1, ranges: pd.DataFrame, casts, params: ChiParams, band
     Returns
     -------
     pandas.DataFrame
-        Columns `cast`, `gain`, `spd`, `n_ctd`, `n_c1`; casts without a
-        single range covering them are skipped.
+        Columns `cast`, `gain`, `spd`, `n_ctd`, `n_c1`; one row per down
+        cast that yielded a fit. A cast is skipped (and, past the
+        non-down and not-covered cases, a warning is logged) when: its
+        `direction` is not "down"; no single range in `ranges` covers its
+        span; the CTD `c` values over the cast span or the selected `c1`
+        segment contain a NaN; or `fit_gain` raises because fewer than 3
+        wavenumber bins fall inside `band`.
     """
     rows = []
     t_ctd = ctd["time"].values.astype("datetime64[ns]")
@@ -122,7 +130,18 @@ def fit_gain_casts(ctd, c1, ranges: pd.DataFrame, casts, params: ChiParams, band
             if tr[0] <= t0 and tr[-1] >= t1:
                 sel = (tr >= t0) & (tr <= t1)
                 seg = c1[int(r.i0):int(r.i0) + int(r.n)][sel]
-                g = fit_gain(ctd["c"].values[m], fs_ctd, seg, float(r.fs), spd, params, band)
+                c_ctd_vals = ctd["c"].values[m]
+                if np.isnan(c_ctd_vals).any() or np.isnan(seg).any():
+                    logger.warning(
+                        "fit_gain_casts: skipping cast %s, NaN in ctd c or c1 span",
+                        cid,
+                    )
+                    break
+                try:
+                    g = fit_gain(c_ctd_vals, fs_ctd, seg, float(r.fs), spd, params, band)
+                except ValueError as exc:
+                    logger.warning("fit_gain_casts: skipping cast %s, %s", cid, exc)
+                    break
                 rows.append(dict(cast=int(cid), gain=g, spd=spd, n_ctd=int(m.sum()), n_c1=int(sel.sum())))
                 break
     return pd.DataFrame(rows, columns=["cast", "gain", "spd", "n_ctd", "n_c1"])

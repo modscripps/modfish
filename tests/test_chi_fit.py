@@ -70,3 +70,74 @@ def test_fit_gain_casts_one_down_cast():
     assert df.cast.tolist() == [1]
     assert df.gain.iloc[0] == pytest.approx(40.0, rel=0.02)
     assert df.spd.iloc[0] == pytest.approx(spd, rel=0.01)
+
+
+def test_fit_gain_casts_skips_nan_cast_and_logs_warning(caplog):
+    import pandas as pd
+    import xarray as xr
+    from modfish.chi.fit import fit_gain_casts
+
+    seconds = 300.0
+    c_ctd, volts, spd = _pair(gain_true=40.0, seconds=seconds)
+    t0 = np.datetime64("2025-12-06T00:00:00")
+    t16 = t0 + (np.arange(c_ctd.size) / FS16 * 1e9).astype("timedelta64[ns]")
+    depth = spd * np.arange(c_ctd.size) / FS16
+    nan_lo, nan_hi = 100, 400
+    c_ctd_nan = c_ctd.copy()
+    c_ctd_nan[nan_lo:nan_hi] = np.nan
+    ctd = xr.Dataset(dict(c=("time", c_ctd_nan), depth=("time", depth)), coords=dict(time=t16))
+    casts = xr.Dataset(
+        dict(start_time=("cast", [t16[16 * 30], t16[nan_lo + 5]]),
+             end_time=("cast", [t16[16 * 270], t16[nan_hi - 5]]),
+             direction=("cast", np.array(["down", "down"], dtype=object))),
+        coords=dict(cast=[1, 2]))
+    ranges = pd.DataFrame([dict(i0=0, n=volts.size, start=t0, fs=FS1)])
+    with caplog.at_level("WARNING"):
+        df = fit_gain_casts(ctd, volts.astype(np.float32), ranges, casts, ChiParams())
+    assert df.cast.tolist() == [1]
+    assert df.gain.iloc[0] == pytest.approx(40.0, rel=0.02)
+    assert any("cast 2" in r.getMessage() for r in caplog.records)
+
+
+def test_fit_gain_casts_skips_up_cast():
+    import pandas as pd
+    import xarray as xr
+    from modfish.chi.fit import fit_gain_casts
+
+    seconds = 300.0
+    c_ctd, volts, spd = _pair(gain_true=40.0, seconds=seconds)
+    t0 = np.datetime64("2025-12-06T00:00:00")
+    t16 = t0 + (np.arange(c_ctd.size) / FS16 * 1e9).astype("timedelta64[ns]")
+    depth = spd * np.arange(c_ctd.size) / FS16
+    ctd = xr.Dataset(dict(c=("time", c_ctd), depth=("time", depth)), coords=dict(time=t16))
+    casts = xr.Dataset(
+        dict(start_time=("cast", [t16[16 * 30]]), end_time=("cast", [t16[16 * 270]]),
+             direction=("cast", np.array(["up"], dtype=object))),
+        coords=dict(cast=[1]))
+    ranges = pd.DataFrame([dict(i0=0, n=volts.size, start=t0, fs=FS1)])
+    df = fit_gain_casts(ctd, volts.astype(np.float32), ranges, casts, ChiParams())
+    assert df.empty
+    assert list(df.columns) == ["cast", "gain", "spd", "n_ctd", "n_c1"]
+
+
+def test_fit_gain_casts_skips_too_few_bins_cast(caplog):
+    import pandas as pd
+    import xarray as xr
+    from modfish.chi.fit import fit_gain_casts
+
+    seconds = 300.0
+    c_ctd, volts, spd = _pair(gain_true=40.0, seconds=seconds)
+    t0 = np.datetime64("2025-12-06T00:00:00")
+    t16 = t0 + (np.arange(c_ctd.size) / FS16 * 1e9).astype("timedelta64[ns]")
+    depth = spd * np.arange(c_ctd.size) / FS16
+    ctd = xr.Dataset(dict(c=("time", c_ctd), depth=("time", depth)), coords=dict(time=t16))
+    casts = xr.Dataset(
+        dict(start_time=("cast", [t16[16 * 30]]), end_time=("cast", [t16[16 * 270]]),
+             direction=("cast", np.array(["down"], dtype=object))),
+        coords=dict(cast=[1]))
+    ranges = pd.DataFrame([dict(i0=0, n=volts.size, start=t0, fs=FS1)])
+    with caplog.at_level("WARNING"):
+        df = fit_gain_casts(ctd, volts.astype(np.float32), ranges, casts, ChiParams(),
+                             band=(0.05, 0.06))
+    assert df.empty
+    assert any("cast 1" in r.getMessage() for r in caplog.records)
