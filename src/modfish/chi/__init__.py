@@ -7,5 +7,6 @@ imports `modfish.fctd` at module level (`modfish.fctd.config` imports
 """
 
 from modfish.chi.config import ChiParams
+from modfish.chi.pipeline import add_chi, chi_dataset
 
-__all__ = ["ChiParams"]
+__all__ = ["ChiParams", "add_chi", "chi_dataset"]
