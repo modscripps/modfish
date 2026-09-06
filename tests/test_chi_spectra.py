@@ -187,6 +187,7 @@ def test_run_range_flags():
     assert np.all(out["flag"] & FLAG_NOISE), "a window at the floor is noise-dominated"
     assert (out["chi"] < 0).any(), "at the floor, scatter must send some windows negative"
     assert np.nanmedian(out["phi"]) > 0.5
+    assert (out["phi"] > 1).any(), "phi is unclamped and exceeds 1 when chi goes negative"
     out = run_range(x, FS, spd, np.full(nwin, np.nan), P)
     assert np.isnan(out["chi"]).all() and np.all(out["flag"] & 64)
 
@@ -249,3 +250,41 @@ def test_run_range_diagnostic_subsample():
     assert np.all(np.diff(out["diag_idx"]) == 7)
     off = run_range(x, FS, spd, dt_dc, P, noise=None, diag_stride=0)
     assert off["diag_idx"].size == 0 and off["diag_Pf"].size == 0
+
+
+def test_run_range_phi_matches_the_chi_noise_ratio():
+    """phi must be the actual ratio chi_noise / (chi + chi_noise), not an
+    approximation that happens to land on the same side of the thresholds.
+
+    `value_noise / value` would pass both `test_run_range_phi_brackets`
+    (they agree far above the floor) and the at-floor median check in
+    `test_run_range_flags` (the wrong formula still lands above 0.5), so
+    the ratio has to be pinned directly against an independent
+    `integrate` call.
+    """
+    rng = np.random.default_rng(20)
+    n = int(10 * FS)
+    at_floor = rng.normal(1.5, np.sqrt(2.4e-10 * FS / 2), n)
+    starts, _ = window_slices(n, FS, P)
+    nwin = starts.size
+    spd = np.full(nwin, 3.0)
+    dt_dc = np.full(nwin, 10.0)
+    nf = NoiseFloor.from_builtin("fctd_2026")
+    out = run_range(at_floor, FS, spd, dt_dc, P, noise=nf)
+    nw = int(round(P.window * FS))
+    checked = 0
+    for j, i0 in enumerate(starts):
+        phi = out["phi"][j]
+        if not np.isfinite(phi) or phi == 1.0:
+            continue
+        x = at_floor[i0:i0 + nw]
+        f, Pf = window_spectrum(x, FS, P.nsec)
+        factor = spectral_factor(f, FS, spd[j], P)
+        k, Pk = f / spd[j], Pf * factor
+        Nk = nf.at(f) * factor
+        kmax = min(P.kmax_cap, P.fmax_cap / spd[j])
+        value, value_noise, nb, k_hi = integrate(
+            k, Pk, Nk, P.kmin, kmax, dt_dc[j], P.D)
+        assert value_noise == pytest.approx(value * phi / (1 - phi))
+        checked += 1
+    assert checked > 0, "no window produced a finite, non-unity phi to check"

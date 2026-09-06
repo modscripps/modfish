@@ -1,5 +1,5 @@
-"""Per-window gradient spectra, corrections, the noise cut and the band
-integral (spec "Estimator per window")."""
+"""Per-window gradient spectra, corrections, the noise-floor subtraction
+and the band integral (spec "Estimator per window")."""
 
 import gsw
 import numpy as np
@@ -223,8 +223,15 @@ def run_range(c1, fs, spd, dtdc_val, params: ChiParams, noise=None, diag_stride=
         Instrument noise floor (see `modfish.chi.noise`) subtracted inside
         the band integral. `None` disables subtraction. Default `None`.
     diag_stride : int, optional
-        Capture the raw window spectrum every `diag_stride`-th retained
-        window (0 disables capture). Default 0.
+        Capture the raw window spectrum for every window whose absolute
+        index (in `window_slices` ordering) is a multiple of
+        `diag_stride`, restricted to windows that reached the spectrum
+        (0 disables capture). Because the stride runs over the absolute
+        index rather than a counter over retained windows, skipped
+        windows (rail, no-environment, slow) make the capture undershoot
+        `range_windows / diag_stride`; this is deliberate, since striding
+        on the absolute index samples uniformly in time regardless of
+        skips. Default 0.
 
     Returns
     -------
@@ -235,7 +242,9 @@ def run_range(c1, fs, spd, dtdc_val, params: ChiParams, noise=None, diag_stride=
             not yield a value.
         `phi` : numpy.ndarray of float
             Noise fraction of the band, `chi_noise / (chi + chi_noise)`.
-            0.0 where `noise` is None or the window exited early.
+            0.0 where `noise` is None and an estimate exists. NaN where
+            the window did not yield a value, same convention as `chi`
+            and `kmax`.
         `kmax` : numpy.ndarray of float
             Upper edge of the wavenumber band summed, cpm, NaN where no
             bin survived.
@@ -270,7 +279,7 @@ def run_range(c1, fs, spd, dtdc_val, params: ChiParams, noise=None, diag_stride=
             f"spd ({len(spd)}) and dtdc_val ({len(dtdc_val)}) each need one "
             f"entry per window ({nwin})")
     chi = np.full(nwin, np.nan)
-    phi = np.zeros(nwin)
+    phi = np.full(nwin, np.nan)
     kmax_out = np.full(nwin, np.nan)
     n_bins = np.zeros(nwin, dtype=int)
     flag = np.zeros(nwin, dtype=np.uint8)
@@ -308,7 +317,9 @@ def run_range(c1, fs, spd, dtdc_val, params: ChiParams, noise=None, diag_stride=
             flag[j] |= FLAG_EMPTY
             continue
         chi[j] = value
-        if noise is not None:
+        if noise is None:
+            phi[j] = 0.0
+        else:
             raw = value + value_noise
             phi[j] = value_noise / raw if raw > 0 else np.inf
             if phi[j] > params.phi_max:
