@@ -59,6 +59,20 @@
     constants. `gain` is S/m per volt of `c1`; the shipboard constant 22
     is per ADC fraction, 8.8 on this scale. Design:
     `plans/2026-09-04-chi-design.md`.
+-   `modfish.chi` subtracts a measured instrument noise spectrum inside
+    the band integral in place of the scalar cut that used to truncate
+    the band. The old cut, raw PSD below `snr * noise_floor` with
+    `noise_floor` = 1e-9 V^2/Hz read off a bench spectrum at 50 to 90
+    Hz, a range the band never reaches, discarded 50.48 percent of the
+    2025 windows. `ChiParams` drops `snr` and `noise_floor` and gains
+    `noise` (a reference to the measured floor, resolved by
+    `modfish.chi.noise.resolve`) and `phi_max` (the noise-fraction
+    threshold for flagging a window noise-dominated). `/chi` and the
+    depth-gridded product both gain `phi`, the noise fraction of the
+    band integral per window. `chi_flag` bit 2 changes meaning from
+    "kmax set by the noise cut" to "noise-dominated". Negative bins in
+    the subtraction are summed as they stand, never clipped, so `chi`
+    can now come out negative.
 
 ### Bug fixes
 -   `tc.correct`, `tc.response_correction` and `tc.thermal_mass_correction`

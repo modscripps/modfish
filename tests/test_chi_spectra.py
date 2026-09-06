@@ -4,13 +4,14 @@ from numpy.fft import irfft, rfftfreq
 
 from modfish.chi.batchelor import band_fraction, spectrum
 from modfish.chi.config import FLAG_EMPTY, FLAG_NOISE, FLAG_RAIL, FLAG_SLOW, ChiParams
+from modfish.chi.noise import NoiseFloor
 from modfish.chi.response import antialias, derivative, preemphasis_inverse
 from modfish.chi.spectra import (
     correct_spectrum,
     dtdc,
     integrate,
-    noise_kmax,
     run_range,
+    spectral_factor,
     window_slices,
     window_spectrum,
 )
@@ -47,25 +48,63 @@ def test_correct_spectrum_closed_form():
     assert Pk == pytest.approx(expected)
 
 
-def test_noise_kmax_and_flags():
-    f = np.linspace(0, FS / 2, 82)
+def test_spectral_factor_reproduces_correct_spectrum():
+    f = np.array([2.0, 10.0, 30.0])
+    Pf = np.array([1.0, 2.0, 3.0])
     spd = 3.0
-    Pf = np.full(f.size, 10 * P.snr * P.noise_floor)
-    assert noise_kmax(f, Pf, spd, P) == np.inf
-    Pf[f > 30.0] = 0.5 * P.noise_floor  # drops below 3x floor above 30 Hz = 10 cpm
-    assert noise_kmax(f, Pf, spd, P) == pytest.approx(10.0, abs=f[1] / spd)
-    assert noise_kmax(f, Pf, spd, ChiParams(enabled=True, gain=1.0, snr=0.0)) == np.inf
+    k, Pk = correct_spectrum(f, Pf, FS, spd, P)
+    assert Pk == pytest.approx(Pf * spectral_factor(f, FS, spd, P))
 
 
 def test_integrate_counts_bins_strictly_inside():
     k = np.arange(0.0, 20.0, 0.5)
     Pk = np.ones(k.size)
-    chi, n, k_hi = integrate(k, Pk, 1.0, 12.5, dtdc_val=10.0, D=1.4e-7)
+    chi, chi_noise, n, k_hi = integrate(k, Pk, None, 1.0, 12.5, dtdc_val=10.0, D=1.4e-7)
     assert n == int(((k > 1.0) & (k < 12.5)).sum())
     assert chi == pytest.approx(6 * 1.4e-7 * 100.0 * n * 0.5)
     assert k_hi == pytest.approx(12.0 + 0.25)  # last bin 12.0, half a bin above it
-    _, n0, k0 = integrate(k, Pk, 1.0, 1.2, dtdc_val=10.0, D=1.4e-7)
+    _, _, n0, k0 = integrate(k, Pk, None, 1.0, 1.2, dtdc_val=10.0, D=1.4e-7)
     assert n0 == 0 and np.isnan(k0)
+
+
+def test_integrate_subtracts_the_floor_inside_the_band():
+    k = np.arange(0.0, 20.0, 0.5)
+    Pk = np.full(k.size, 3.0)
+    Nk = np.full(k.size, 1.0)
+    chi, chi_noise, n, k_hi = integrate(k, Pk, Nk, 1.0, 12.5, dtdc_val=10.0, D=1.4e-7)
+    c = 6 * 1.4e-7 * 100.0 * 0.5
+    assert n == int(((k > 1.0) & (k < 12.5)).sum())
+    assert chi == pytest.approx(c * 2.0 * n)
+    assert chi_noise == pytest.approx(c * 1.0 * n)
+    assert k_hi == pytest.approx(12.25)
+
+
+def test_integrate_with_no_floor_matches_a_zero_floor():
+    k = np.arange(0.0, 20.0, 0.5)
+    Pk = np.full(k.size, 3.0)
+    a = integrate(k, Pk, None, 1.0, 12.5, dtdc_val=10.0, D=1.4e-7)
+    b = integrate(k, Pk, np.zeros(k.size), 1.0, 12.5, dtdc_val=10.0, D=1.4e-7)
+    assert a[0] == pytest.approx(b[0]) and a[1] == 0.0
+
+
+def test_integrate_never_clips_negative_bins():
+    """A window at the floor must average to zero across realizations.
+
+    Clipping per bin rectifies the estimator scatter and biases chi high
+    exactly where the correction matters most.
+    """
+    rng = np.random.default_rng(7)
+    k = np.arange(0.0, 20.0, 0.5)
+    Nk = np.full(k.size, 1.0)
+    nu = 11.04
+    chis = []
+    for _ in range(4000):
+        Pk = Nk * rng.chisquare(nu, k.size) / nu
+        chis.append(integrate(k, Pk, Nk, 1.0, 12.5, dtdc_val=10.0, D=1.4e-7)[0])
+    chis = np.array(chis)
+    scale = 6 * 1.4e-7 * 100.0 * 0.5 * int(((k > 1.0) & (k < 12.5)).sum())
+    assert abs(chis.mean()) < 0.05 * scale, "band sum is biased; is a clip present?"
+    assert (chis < 0).mean() == pytest.approx(0.5, abs=0.1)
 
 
 def test_window_slices():
@@ -100,7 +139,7 @@ def _synthetic_volts(eps, chi, spd, gain, seconds, params, seed=2):
 
 def test_chain_recovers_batchelor_chi():
     eps, chi, spd, gain = 1e-8, 1e-9, 3.0, 50.0
-    params = ChiParams(enabled=True, gain=gain, snr=0.0)
+    params = ChiParams(enabled=True, gain=gain)
     x, dt_dc = _synthetic_volts(eps, chi, spd, gain, seconds=120.0, params=params)
     starts, _ = window_slices(x.size, FS, params)
     nwin = starts.size
@@ -141,10 +180,20 @@ def test_run_range_flags():
     railed = x.copy(); railed[:50] = 2.5
     out = run_range(railed, FS, spd, dt_dc, P)
     assert out["flag"][0] & FLAG_RAIL and not (out["flag"][-1] & FLAG_RAIL)
-    quiet = rng.normal(1.5, np.sqrt(0.2 * P.noise_floor * FS / 2), n)  # below the floor
-    out = run_range(quiet, FS, spd, dt_dc, P)
-    assert np.all(out["flag"] & FLAG_EMPTY) and np.isnan(out["chi"]).all()
-    assert np.all(out["flag"] & FLAG_NOISE)  # the cut fired below both caps
+    # spd = 0.5 passes min_spd (the check is `s < params.min_spd`), but the
+    # wavenumber bin width (1 / nsec) / spd = 4 cpm leaves only k = 4, 8, 12
+    # inside (1, 12.5), three bins against min_bins = 4.
+    empty = spd.copy(); empty[0] = 0.5
+    out = run_range(x, FS, empty, dt_dc, P)
+    assert out["flag"][0] & FLAG_EMPTY and np.isnan(out["chi"][0])
+    nf = NoiseFloor.from_builtin("fctd_2026")
+    at_floor = rng.normal(1.5, np.sqrt(2.4e-10 * FS / 2), n)
+    out = run_range(at_floor, FS, spd, dt_dc, P, noise=nf)
+    assert np.isfinite(out["chi"]).all(), "the noise path must never produce NaN"
+    assert np.all(out["flag"] & FLAG_NOISE), "a window at the floor is noise-dominated"
+    assert (out["chi"] < 0).any(), "at the floor, scatter must send some windows negative"
+    assert np.nanmedian(out["phi"]) > 0.5
+    assert (out["phi"] > 1).any(), "phi is unclamped and exceeds 1 when chi goes negative"
     out = run_range(x, FS, spd, np.full(nwin, np.nan), P)
     assert np.isnan(out["chi"]).all() and np.all(out["flag"] & 64)
 
@@ -163,3 +212,85 @@ def test_run_range_checks_the_per_window_lengths():
         run_range(x, FS, spd[:-1], dt_dc, P)
     with pytest.raises(ValueError, match="one entry per window"):
         run_range(x, FS, spd, dt_dc[:-1], P)
+
+
+def test_run_range_kmax_no_longer_depends_on_the_spectrum():
+    rng = np.random.default_rng(11)
+    n = int(10 * FS)
+    loud = rng.normal(1.5, 1e-3, n)
+    quiet = rng.normal(1.5, 1e-7, n)
+    starts, _ = window_slices(n, FS, P)
+    spd = np.full(starts.size, 3.0)
+    dt_dc = np.full(starts.size, 10.0)
+    nf = NoiseFloor.from_builtin("fctd_2026")
+    a = run_range(loud, FS, spd, dt_dc, P, noise=nf)
+    b = run_range(quiet, FS, spd, dt_dc, P, noise=nf)
+    assert a["kmax"] == pytest.approx(b["kmax"], nan_ok=True)
+
+
+def test_run_range_phi_brackets():
+    rng = np.random.default_rng(12)
+    n = int(10 * FS)
+    starts, _ = window_slices(n, FS, P)
+    spd = np.full(starts.size, 3.0)
+    dt_dc = np.full(starts.size, 10.0)
+    nf = NoiseFloor.from_builtin("fctd_2026")
+    loud = rng.normal(1.5, 1e-3, n)
+    out = run_range(loud, FS, spd, dt_dc, P, noise=nf)
+    assert np.nanmedian(out["phi"]) < 0.05, "signal far above the floor"
+    off = run_range(loud, FS, spd, dt_dc, P, noise=None)
+    assert np.all(off["phi"] == 0.0)
+    assert not np.any(off["flag"] & FLAG_NOISE)
+
+
+def test_run_range_diagnostic_subsample():
+    rng = np.random.default_rng(13)
+    n = int(20 * FS)
+    x = rng.normal(1.5, 1e-3, n)
+    starts, _ = window_slices(n, FS, P)
+    spd = np.full(starts.size, 3.0)
+    dt_dc = np.full(starts.size, 10.0)
+    out = run_range(x, FS, spd, dt_dc, P, noise=None, diag_stride=7)
+    assert out["diag_Pf"].shape[0] == out["diag_idx"].size
+    assert out["diag_Pf"].shape[1] == out["diag_f"].size
+    assert np.all(np.diff(out["diag_idx"]) == 7)
+    off = run_range(x, FS, spd, dt_dc, P, noise=None, diag_stride=0)
+    assert off["diag_idx"].size == 0 and off["diag_Pf"].size == 0
+
+
+def test_run_range_phi_matches_the_chi_noise_ratio():
+    """phi must be the actual ratio chi_noise / (chi + chi_noise), not an
+    approximation that happens to land on the same side of the thresholds.
+
+    `value_noise / value` would pass both `test_run_range_phi_brackets`
+    (they agree far above the floor) and the at-floor median check in
+    `test_run_range_flags` (the wrong formula still lands above 0.5), so
+    the ratio has to be pinned directly against an independent
+    `integrate` call.
+    """
+    rng = np.random.default_rng(20)
+    n = int(10 * FS)
+    at_floor = rng.normal(1.5, np.sqrt(2.4e-10 * FS / 2), n)
+    starts, _ = window_slices(n, FS, P)
+    nwin = starts.size
+    spd = np.full(nwin, 3.0)
+    dt_dc = np.full(nwin, 10.0)
+    nf = NoiseFloor.from_builtin("fctd_2026")
+    out = run_range(at_floor, FS, spd, dt_dc, P, noise=nf)
+    nw = int(round(P.window * FS))
+    checked = 0
+    for j, i0 in enumerate(starts):
+        phi = out["phi"][j]
+        if not np.isfinite(phi) or phi == 1.0:
+            continue
+        x = at_floor[i0:i0 + nw]
+        f, Pf = window_spectrum(x, FS, P.nsec)
+        factor = spectral_factor(f, FS, spd[j], P)
+        k, Pk = f / spd[j], Pf * factor
+        Nk = nf.at(f) * factor
+        kmax = min(P.kmax_cap, P.fmax_cap / spd[j])
+        value, value_noise, nb, k_hi = integrate(
+            k, Pk, Nk, P.kmin, kmax, dt_dc[j], P.D)
+        assert value_noise == pytest.approx(value * phi / (1 - phi))
+        checked += 1
+    assert checked > 0, "no window produced a finite, non-unity phi to check"

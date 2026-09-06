@@ -5,7 +5,7 @@ import dataclasses
 ANTIALIAS_KINDS = ("som_sinc4", "ap00_sinc2")
 
 FLAG_SLOW = 1  # fall rate below min_spd
-FLAG_NOISE = 2  # kmax set by the noise cut, below both caps
+FLAG_NOISE = 2  # noise-dominated: phi above phi_max
 FLAG_EMPTY = 4  # fewer than min_bins wavenumber bins survived
 FLAG_RCLIP = 8  # closure solve at an edge of the eps table (r held at the floor value below it, NaN above it)
 FLAG_N2 = 16  # n2 finite and not positive, closure undefined; a NaN n2 gets bit 64 instead
@@ -14,7 +14,7 @@ FLAG_NOENV = 64  # no environment: window center outside the ctd record, a NaN c
 FLAG_RRHO = 128  # (1 + 1/Rrho^2) capped at rrho_factor_max
 
 FLAG_MEANINGS = (
-    "1 slow, 2 noise_limited, 4 band_empty, 8 eps_table_edge, 16 n2_not_positive, "
+    "1 slow, 2 noise_dominated, 4 band_empty, 8 eps_table_edge, 16 n2_not_positive, "
     "32 rail, 64 no_closure_inputs, 128 rrho_capped"
 )
 
@@ -38,10 +38,13 @@ class ChiParams:
     antialias : str
         "som_sinc4" (SOM ADC, power sinc^8(pi f/fs)) or "ap00_sinc2"
         (Alford and Pinkel 2000, sinc^2(pi k/k_N)).
-    noise_floor : float
-        V^2/Hz of the raw channel (bench, 1e-9).
-    snr : float
-        Noise cut factor; 0 disables the cut.
+    noise : str or None
+        Reference to the instrument noise floor subtracted inside the band
+        integral. "builtin:<name>" selects a packaged spectrum, a path
+        loads one, None disables subtraction. Resolved by
+        `modfish.chi.noise.resolve`.
+    phi_max : float
+        Noise fraction above which a window is flagged noise-dominated.
     kmin, kmax_cap : float
         cpm, integration band limits.
     fmax_cap : float
@@ -81,8 +84,8 @@ class ChiParams:
     gain: float | None = None
     gain_source: str = ""
     antialias: str = "som_sinc4"
-    noise_floor: float = 1e-9
-    snr: float = 3.0
+    noise: str | None = "builtin:fctd_2026"
+    phi_max: float = 0.5
     kmin: float = 1.0
     kmax_cap: float = 12.5
     fmax_cap: float = 50.0

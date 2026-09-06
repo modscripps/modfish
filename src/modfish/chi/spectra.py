@@ -1,5 +1,5 @@
-"""Per-window gradient spectra, corrections, the noise cut and the band
-integral (spec "Estimator per window")."""
+"""Per-window gradient spectra, corrections, the noise-floor subtraction
+and the band integral (spec "Estimator per window")."""
 
 import gsw
 import numpy as np
@@ -74,13 +74,28 @@ def window_spectrum(x, fs, nsec):
                  return_onesided=True)
 
 
+def spectral_factor(f, fs, spd, params: ChiParams):
+    """The multiplier taking a raw `c1` PSD to the corrected gradient
+    spectrum.
+
+    `spd gain^2 (2 pi k)^2 / (|H_pre|^2 A(f))` with `k = f / spd`. It is a
+    property of the acquisition chain, so the noise floor is pushed through
+    the same factor as the signal.
+    """
+    f = np.asarray(f, dtype=float)
+    k = f / spd
+    return (spd * params.gain**2 * derivative(k)
+            * preemphasis_inverse(f, params.R24, params.R25, params.R22, params.C19)
+            / antialias(f, fs, params.antialias))
+
+
 def correct_spectrum(f, Pf, fs, spd, params: ChiParams):
     """Corrected conductivity-gradient spectrum on the wavenumber axis.
 
     `Phi_dCdz(k) = Phi_raw(f) spd gain^2 (2 pi k)^2 / (|H_pre|^2 A(f))`,
     with `k = f / spd` in cpm. Each named correction (preemphasis
     inversion, antialias compensation, the frequency-to-wavenumber
-    spectral derivative) is applied exactly once.
+    spectral derivative) is applied exactly once, via `spectral_factor`.
 
     Parameters
     ----------
@@ -103,73 +118,42 @@ def correct_spectrum(f, Pf, fs, spd, params: ChiParams):
         Corrected conductivity-gradient spectrum, (S/m)^2 m^-2 per cpm.
     """
     f = np.asarray(f, dtype=float)
-    k = f / spd
-    factor = (spd * params.gain**2 * derivative(k)
-              * preemphasis_inverse(f, params.R24, params.R25, params.R22, params.C19)
-              / antialias(f, fs, params.antialias))
-    return k, np.asarray(Pf, dtype=float) * factor
+    return f / spd, np.asarray(Pf, dtype=float) * spectral_factor(f, fs, spd, params)
 
 
-def noise_kmax(f, Pf, spd, params: ChiParams):
-    """First wavenumber above `kmin` where the raw PSD drops below the
-    noise floor.
+def integrate(k, Pk, Nk, kmin, kmax, dtdc_val, D):
+    """Noise-corrected band integral of the corrected spectrum.
 
-    Parameters
-    ----------
-    f : array_like
-        Frequency, Hz.
-    Pf : array_like
-        Raw one-sided power spectral density, V^2/Hz.
-    spd : float
-        Fall rate, m/s.
-    params : ChiParams
-        Chi parameters (`kmin`, `snr`, `noise_floor`).
-
-    Returns
-    -------
-    float
-        Wavenumber, cpm, of the first bin above `kmin` where `Pf` drops
-        below `snr * noise_floor`. `inf` when it never does or when
-        `params.snr` is 0 (the cut disabled).
-    """
-    if params.snr <= 0:
-        return np.inf
-    k = np.asarray(f, dtype=float) / spd
-    below = (k > params.kmin) & (np.asarray(Pf) < params.snr * params.noise_floor)
-    idx = np.flatnonzero(below)
-    return float(k[idx[0]]) if idx.size else np.inf
-
-
-def integrate(k, Pk, kmin, kmax, dtdc_val, D):
-    """Rectangle-rule band integral of the corrected spectrum.
-
-    `chi = 6 D dTdC^2 sum_{kmin < k < kmax} Pk dk`, over the bins strictly
-    inside the band.
+    `chi = 6 D dTdC^2 sum_{kmin < k < kmax} (Pk - Nk) dk`, with the noise
+    part returned separately over the same bins so the two never drift
+    apart. Negative bins are summed as they stand: clipping them rectifies
+    the estimator scatter and biases chi high near the floor.
 
     Parameters
     ----------
     k : array_like
         Wavenumber, cpm, uniformly spaced.
     Pk : array_like
-        Corrected conductivity-gradient spectrum, (S/m)^2 m^-2 per cpm.
+        Corrected gradient spectrum.
+    Nk : array_like or None
+        The noise floor on the same axis. `None` disables subtraction.
     kmin, kmax : float
         Band limits, cpm.
-    dtdc_val : float
-        dT/dC, K per S/m.
-    D : float
-        Thermal diffusivity, m^2/s.
+    dtdc_val, D : float
+        dT/dC in K per S/m, thermal diffusivity in m^2/s.
 
     Returns
     -------
     chi : float
-        Temperature variance dissipation rate, K^2/s. NaN when no bin
-        survives.
+        K^2/s, may be negative when the window sits at the floor. NaN when
+        no bin survives.
+    chi_noise : float
+        K^2/s, the noise part of the same band. 0.0 when `Nk` is None,
+        NaN when no bin survives regardless of `Nk`.
     n_bins : int
         Number of bins strictly inside `(kmin, kmax)`.
     k_hi : float
-        Upper edge of the band actually summed, `k_last + dk / 2`, where
-        `k_last` is the wavenumber of the last surviving bin. NaN when no
-        bin survives.
+        Upper edge of the band actually summed. NaN when no bin survives.
 
     Notes
     -----
@@ -181,10 +165,15 @@ def integrate(k, Pk, kmin, kmax, dtdc_val, D):
     sel = (k > kmin) & (k < kmax)
     n = int(sel.sum())
     if n == 0:
-        return np.nan, 0, np.nan
+        return np.nan, np.nan, 0, np.nan
     dk = k[1] - k[0]
-    chi = float(6 * D * dtdc_val**2 * np.nansum(np.asarray(Pk)[sel]) * dk)
-    return chi, n, float(k[sel][-1] + dk / 2)
+    c = 6 * D * dtdc_val**2 * dk
+    Pk = np.asarray(Pk, dtype=float)[sel]
+    if Nk is None:
+        return float(c * np.nansum(Pk)), 0.0, n, float(k[sel][-1] + dk / 2)
+    Nk = np.asarray(Nk, dtype=float)[sel]
+    return (float(c * np.nansum(Pk - Nk)), float(c * np.nansum(Nk)), n,
+            float(k[sel][-1] + dk / 2))
 
 
 def window_slices(n, fs, params: ChiParams):
@@ -214,7 +203,7 @@ def window_slices(n, fs, params: ChiParams):
     return starts, (starts + nw / 2) / fs
 
 
-def run_range(c1, fs, spd, dtdc_val, params: ChiParams):
+def run_range(c1, fs, spd, dtdc_val, params: ChiParams, noise=None, diag_stride=0):
     """Chi of every full window in one gap-free range.
 
     Parameters
@@ -231,13 +220,32 @@ def run_range(c1, fs, spd, dtdc_val, params: ChiParams):
         ordering. NaN marks a window without environment data.
     params : ChiParams
         Chi parameters.
+    noise : NoiseFloor or None, optional
+        Instrument noise floor (see `modfish.chi.noise`) subtracted inside
+        the band integral. `None` disables subtraction. Default `None`.
+    diag_stride : int, optional
+        Capture the raw window spectrum for every window whose absolute
+        index (in `window_slices` ordering) is a multiple of
+        `diag_stride`, restricted to windows that reached the spectrum
+        (0 disables capture). Because the stride runs over the absolute
+        index rather than a counter over retained windows, skipped
+        windows (no-environment, slow) make the capture undershoot
+        `range_windows / diag_stride`; this is deliberate, since striding
+        on the absolute index samples uniformly in time regardless of
+        skips. Default 0.
 
     Returns
     -------
     dict
         `chi` : numpy.ndarray of float
-            Temperature variance dissipation rate, K^2/s, NaN where the
-            window did not yield a value.
+            Temperature variance dissipation rate, K^2/s. May be negative
+            when the window sits at the floor. NaN where the window did
+            not yield a value.
+        `phi` : numpy.ndarray of float
+            Noise fraction of the band, `chi_noise / (chi + chi_noise)`.
+            0.0 where `noise` is None and an estimate exists. NaN where
+            the window did not yield a value, same convention as `chi`
+            and `kmax`.
         `kmax` : numpy.ndarray of float
             Upper edge of the wavenumber band summed, cpm, NaN where no
             bin survived.
@@ -245,7 +253,15 @@ def run_range(c1, fs, spd, dtdc_val, params: ChiParams):
             Number of wavenumber bins summed.
         `flag` : numpy.ndarray of uint8
             Per-window flag bits (see `modfish.chi.config`).
-        One entry per window.
+        `diag_idx` : numpy.ndarray of int
+            Window indices whose raw spectrum was captured.
+        `diag_Pf` : numpy.ndarray
+            Raw one-sided PSD of each captured window, one row per
+            `diag_idx` entry. Shape `(0, 0)` when nothing was captured.
+        `diag_f` : numpy.ndarray
+            Frequency axis shared by every `diag_Pf` row, from the first
+            captured window. Shape `(0,)` when nothing was captured.
+        One entry per window, except `diag_idx`/`diag_Pf`/`diag_f`.
 
     Raises
     ------
@@ -264,9 +280,11 @@ def run_range(c1, fs, spd, dtdc_val, params: ChiParams):
             f"spd ({len(spd)}) and dtdc_val ({len(dtdc_val)}) each need one "
             f"entry per window ({nwin})")
     chi = np.full(nwin, np.nan)
+    phi = np.full(nwin, np.nan)
     kmax_out = np.full(nwin, np.nan)
     n_bins = np.zeros(nwin, dtype=int)
     flag = np.zeros(nwin, dtype=np.uint8)
+    diag_idx, diag_Pf, freq = [], [], None
     for j, i0 in enumerate(starts):
         x = np.asarray(c1[i0:i0 + nw], dtype=float)
         if np.any(x <= params.rail_lo) or np.any(x >= params.rail_hi):
@@ -282,17 +300,33 @@ def run_range(c1, fs, spd, dtdc_val, params: ChiParams):
             flag[j] |= FLAG_NOENV
             continue
         f, Pf = window_spectrum(x, fs, params.nsec)
-        k, Pk = correct_spectrum(f, Pf, fs, s, params)
-        k_noise = noise_kmax(f, Pf, s, params)
-        caps = min(params.kmax_cap, params.fmax_cap / s)
-        kmax = min(caps, k_noise)
-        if k_noise < caps:
-            flag[j] |= FLAG_NOISE
-        value, nb, k_hi = integrate(k, Pk, params.kmin, kmax, dtdc_val[j], params.D)
+        if diag_stride and j % diag_stride == 0:
+            if freq is None:
+                freq = f
+            diag_idx.append(j)
+            diag_Pf.append(Pf)
+        factor = spectral_factor(f, fs, s, params)
+        k, Pk = f / s, Pf * factor
+        Nk = None if noise is None else noise.at(f) * factor
+        # the band no longer depends on the spectrum
+        kmax = min(params.kmax_cap, params.fmax_cap / s)
+        value, value_noise, nb, k_hi = integrate(
+            k, Pk, Nk, params.kmin, kmax, dtdc_val[j], params.D)
         n_bins[j] = nb
-        kmax_out[j] = k_hi  # the band actually summed, for the closure's r
+        kmax_out[j] = k_hi
         if nb < params.min_bins:
             flag[j] |= FLAG_EMPTY
             continue
         chi[j] = value
-    return dict(chi=chi, kmax=kmax_out, n_bins=n_bins, flag=flag)
+        if noise is None:
+            phi[j] = 0.0
+        else:
+            raw = value + value_noise
+            phi[j] = value_noise / raw if raw > 0 else np.inf
+            if phi[j] > params.phi_max:
+                flag[j] |= FLAG_NOISE
+    return dict(chi=chi, phi=phi, kmax=kmax_out, n_bins=n_bins, flag=flag,
+                diag_idx=np.asarray(diag_idx, dtype=int),
+                diag_Pf=(np.asarray(diag_Pf) if diag_Pf
+                         else np.zeros((0, 0))),
+                diag_f=(freq if freq is not None else np.zeros(0)))

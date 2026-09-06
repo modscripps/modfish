@@ -108,3 +108,39 @@ def test_grid_chi_flag_masks_kmax_mean(l1_tree):
     bin_idx = int(np.nanargmin(np.abs(g["depth"].values - depth_val)))
     assert g["kmax"].values[bin_idx, j] == pytest.approx(50.0)
     assert int(g["chi_flag"].values[bin_idx, j]) & FLAG_EMPTY
+
+
+def test_grid_means_phi_and_bit2_does_not_exclude(l1_tree):
+    """phi is an arithmetic bin mean, and a noise-dominated window still
+    contributes: a small signal is a valid estimate."""
+    from modfish.chi.config import FLAG_NOISE
+
+    ctd = l1_tree["ctd"].to_dataset()
+    casts_ds = l1_tree["casts"].to_dataset()
+    cid = int(casts_ds["cast"].values[0])
+    depth_val = float(np.nanmean(ctd["depth"].values))
+
+    chi_ds = xr.Dataset(
+        {
+            "depth": ("time", np.array([depth_val, depth_val])),
+            "cast": ("time", np.array([cid, cid], dtype=int)),
+            "chi": ("time", np.array([1e-9, 3e-9])),
+            "phi": ("time", np.array([0.8, 0.2])),
+            "chi_flag": ("time", np.array([FLAG_NOISE, 0], dtype=np.uint8)),
+        },
+        coords={"time": np.array(["2020-01-01T00:00:00", "2020-01-01T00:00:01"],
+                                 dtype="datetime64[ns]")},
+    )
+    chi_ds.attrs = dict(gain=50.0, gain_source="test", antialias="som_sinc4",
+                        modfish_version="0.0.0")
+    groups = {f"/{name}": child.to_dataset() for name, child in l1_tree.children.items()}
+    groups["/chi"] = chi_ds
+    tree = xr.DataTree.from_dict(groups)
+    tree.attrs = dict(l1_tree.attrs)
+
+    g = grid_casts(tree)
+    j = list(casts_ds["cast"].values).index(cid)
+    bin_idx = int(np.nanargmin(np.abs(g["depth"].values - depth_val)))
+    assert "phi" in g.data_vars and g["phi"].dims == ("depth", "cast")
+    assert g["phi"].values[bin_idx, j] == pytest.approx(0.5)
+    assert int(g["chi_flag"].values[bin_idx, j]) & FLAG_NOISE

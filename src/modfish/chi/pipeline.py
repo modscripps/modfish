@@ -1,6 +1,7 @@
 """Assemble the `/chi` group of an L1 tree from the L0 `efe/c1` files."""
 
 import importlib.metadata
+import logging
 
 import numpy as np
 import pandas as pd
@@ -11,8 +12,11 @@ from modfish.chi.batchelor import FractionTable
 from modfish.chi.closure import closure, stratification
 from modfish.chi.config import FLAG_MEANINGS, FLAG_NOENV, ChiParams
 from modfish.chi.load import load_c1
+from modfish.chi.noise import resolve
 from modfish.chi.spectra import dtdc, run_range, window_slices
 from modfish.utils import sampling_interval
+
+logger = logging.getLogger(__name__)
 
 
 def _interp_at(centers_ns, time_ns, values):
@@ -86,6 +90,52 @@ def _label_casts(centers, casts: xr.Dataset):
     return label
 
 
+def _record_floor(diag, nu, deep_frac=80, qs=(0.02, 0.05, 0.30),
+                  ref_f=(4.0, 10.0, 20.0, 37.5)):
+    """The record's own floor estimate and its lower-tail flatness.
+
+    Pools the subsampled raw PSDs kept by `run_range`, takes the deepest
+    `100 - deep_frac` percent of them and inverts the chi-square quantile,
+    `N_hat(q) = P_q / Q(q)`. The result is an upper bound on this record's
+    floor. Flatness is `N_hat(0.30) / N_hat(0.02)` at 20 Hz; near 1 means a
+    stationary additive level dominates the tail.
+
+    Returns `(ref_f, N_hat at q=0.05, flatness)`, all NaN when too few
+    spectra were kept.
+    """
+    from scipy.stats import chi2
+
+    ref = np.asarray(ref_f, dtype=float)
+    if not diag:
+        return ref, np.full(ref.size, np.nan), np.nan
+    # Each range carries its own fs, and run_range's Welch grid depends on
+    # fs, so two ranges of one deployment can produce frequency grids of
+    # different length (or the same length from a different fs). Ranges in
+    # one deployment do not always share a grid, so pool only the entries
+    # that share one, keeping the largest group.
+    groups = {}
+    for Pf, dep, fg in diag:
+        groups.setdefault(np.asarray(fg, dtype=float).tobytes(), []).append((Pf, dep, fg))
+    best = max(groups.values(), key=lambda g: sum(int(d[0].shape[0]) for d in g))
+    P = np.concatenate([d[0] for d in best])
+    dep = np.concatenate([d[1] for d in best])
+    f = np.asarray(best[0][2], dtype=float)
+    good = np.isfinite(dep)
+    if good.sum() < 200:
+        return ref, np.full(ref.size, np.nan), np.nan
+    P, dep = P[good], dep[good]
+    deep = dep >= np.nanpercentile(dep, deep_frac)
+    if deep.sum() < 200:
+        return ref, np.full(ref.size, np.nan), np.nan
+    Q = chi2.ppf(np.asarray(qs), nu) / nu
+    emp = np.percentile(P[deep], 100 * np.asarray(qs), axis=0)
+    nhat = emp / Q[:, None]
+    j = int(np.argmin(np.abs(f - 20.0)))
+    flat = float(nhat[2, j] / nhat[0, j])
+    at_ref = 10 ** np.interp(ref, f, np.log10(nhat[1]))
+    return ref, at_ref, flat
+
+
 def chi_dataset(ctd: xr.Dataset, casts: xr.Dataset, c1, ranges: pd.DataFrame,
                 params: ChiParams) -> xr.Dataset:
     """Build the window-level chi Dataset from an L1 `ctd` group, its
@@ -118,11 +168,16 @@ def chi_dataset(ctd: xr.Dataset, casts: xr.Dataset, c1, ranges: pd.DataFrame,
     -------
     xarray.Dataset
         On dim `time` (window centers), with data variables `depth`,
-        `p`, `lon`, `lat`, `spd`, `chi`, `kmax`, `n_bins`, `range_id`,
-        `chi_flag`, coordinate `cast`, and, when `params.closure` is
-        True, `chi_tot`, `eps_chi`, `r`, `n2`, `Tz`, `Sz`, `Rrho`. Group
-        attrs carry every `ChiParams` field, `flag_meanings`, `range_fs`,
-        `n_ranges`, `n_windows` and `modfish_version`.
+        `p`, `lon`, `lat`, `spd`, `chi`, `phi`, `kmax`, `n_bins`,
+        `range_id`, `chi_flag`, coordinate `cast`, and, when
+        `params.closure` is True, `chi_tot`, `eps_chi`, `r`, `n2`, `Tz`,
+        `Sz`, `Rrho`. Group attrs carry every `ChiParams` field,
+        `flag_meanings`, `range_fs`, `n_ranges`, `n_windows` and
+        `modfish_version`, and, when `params.noise` resolves to a floor,
+        that floor's provenance (`noise_source`, `noise_records`,
+        `noise_measured`, `noise_nu`) and the record's own floor estimate
+        (`record_floor_f`, `record_floor_n`, `record_flatness_20hz`) for
+        comparison; the estimate never feeds back into the subtraction.
 
     Raises
     ------
@@ -132,12 +187,23 @@ def chi_dataset(ctd: xr.Dataset, casts: xr.Dataset, c1, ranges: pd.DataFrame,
     """
     if not params.enabled or params.gain is None:
         raise ValueError("add_chi needs ChiParams with enabled=True and a gain")
+    floor = resolve(params.noise)
     fs16 = 1.0 / sampling_interval(ctd["time"].values)
     time_ns = ctd["time"].values.astype("datetime64[ns]").astype("int64")
     spd16 = np.gradient(ctd["depth"].values.astype(float)) * fs16
     spd16 = np.abs(uniform_filter1d(spd16, max(int(round(params.spd_smooth * fs16)), 1), mode="nearest"))
 
+    # _record_floor pools across ranges, so size the stride from the
+    # deployment's total window count. Targeting about 5000 retained
+    # spectra leaves roughly 1000 in the deepest 20 percent whatever way
+    # the record is split into ranges. 5000 x 82 bins x 8 bytes is 3.3 MB.
+    total_win = sum(int(r.n) / (params.step * float(r.fs))
+                    for _, r in ranges.iterrows()
+                    if np.isfinite(r.fs) and r.n >= 2)
+    stride = 0 if floor is None else max(int(round(total_win / 5000)), 1)
+
     pieces = []
+    diag = []
     for rid, r in ranges.iterrows():
         if not np.isfinite(r.fs) or r.n < 2:
             continue
@@ -155,14 +221,18 @@ def chi_dataset(ctd: xr.Dataset, casts: xr.Dataset, c1, ranges: pd.DataFrame,
         spd = _interp_at(centers_ns, time_ns, spd16)
         dt_dc = dtdc(env["SP"], env["t"], env["p"])
         seg = c1[int(r.i0):int(r.i0) + int(r.n)]
-        out = run_range(seg, float(r.fs), spd, dt_dc, params)
+        out = run_range(seg, float(r.fs), spd, dt_dc, params,
+                        noise=floor, diag_stride=stride)
         pieces.append(xr.Dataset(
             dict(depth=("time", env["depth"]), p=("time", env["p"]), lon=("time", env["lon"]),
                  lat=("time", env["lat"]), spd=("time", spd), chi=("time", out["chi"]),
+                 phi=("time", out["phi"]),
                  kmax=("time", out["kmax"]), n_bins=("time", out["n_bins"]),
                  range_id=("time", np.full(starts.size, int(rid), dtype=int)),
                  chi_flag=("time", out["flag"])),
             coords=dict(time=centers_ns.astype("datetime64[ns]"))))
+        if out["diag_idx"].size:
+            diag.append((out["diag_Pf"], env["depth"][out["diag_idx"]], out["diag_f"]))
     if not pieces:
         raise ValueError("no full chi window in any range")
     ds = xr.concat(pieces, dim="time")
@@ -187,6 +257,7 @@ def chi_dataset(ctd: xr.Dataset, casts: xr.Dataset, c1, ranges: pd.DataFrame,
         ds["chi_flag"] = ("time", flag.astype(np.uint8))
 
     ds["chi"].attrs = dict(long_name="temperature-gradient variance dissipation, resolved band", units="K^2/s")
+    ds["phi"].attrs = dict(long_name="noise fraction of the band integral", units="1")
     ds["kmax"].attrs = dict(long_name="upper integration limit", units="cpm")
     ds["spd"].attrs = dict(long_name="fall rate", units="m/s")
     for name in ("depth", "p", "lon", "lat"):
@@ -200,6 +271,23 @@ def chi_dataset(ctd: xr.Dataset, casts: xr.Dataset, c1, ranges: pd.DataFrame,
     attrs["modfish_version"] = importlib.metadata.version("modfish")
     attrs["enabled"] = int(params.enabled)
     attrs["closure"] = int(params.closure)
+    if floor is not None:
+        attrs["noise_source"] = floor.source
+        attrs["noise_records"] = floor.records
+        attrs["noise_measured"] = floor.measured
+        attrs["noise_nu"] = float(floor.nu)
+        rf, rn, flat = _record_floor(diag, floor.nu)
+        attrs["record_floor_f"] = [float(v) for v in rf]
+        attrs["record_floor_n"] = [float(v) for v in rn]
+        attrs["record_flatness_20hz"] = float(flat)
+        ref = floor.at(rf)
+        ratio_20 = float(rn[2] / ref[2])
+        if np.all(np.isfinite(rn)) and ratio_20 > 10 and flat < 1.6:
+            logger.warning(
+                "record floor estimate is %.1fx the shipped floor at 20 Hz "
+                "with a flat lower tail (%.2f). The shipped floor may not "
+                "suit this record; see chi.noise per-entry override.",
+                ratio_20, flat)
     ds.attrs = attrs
     return ds
 
