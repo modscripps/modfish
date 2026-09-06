@@ -44,6 +44,22 @@ def test_roundtrip_through_a_file(tmp_path):
     assert back.source == "test"
 
 
+def test_construction_coerces_plain_lists():
+    nf = NoiseFloor(f=[1.0, 2.0, 3.0], n=[1e-10, 2e-10, 3e-10],
+                     nu=11.0, source="s", records="r", measured="m")
+    assert isinstance(nf.f, np.ndarray)
+    assert isinstance(nf.n, np.ndarray)
+
+
+def test_construction_validates_lists_with_valueerror():
+    with pytest.raises(ValueError, match="strictly increasing"):
+        NoiseFloor(f=[2.0, 1.0, 3.0], n=[1e-10, 2e-10, 3e-10],
+                   nu=11.0, source="s", records="r", measured="m")
+    with pytest.raises(ValueError, match="positive"):
+        NoiseFloor(f=[1.0, 2.0, 3.0], n=[1e-10, -2e-10, 3e-10],
+                   nu=11.0, source="s", records="r", measured="m")
+
+
 def test_welch_degrees_of_freedom():
     """nu underpins the floor estimator, so it is measured, not assumed."""
     rng = np.random.default_rng(0)
