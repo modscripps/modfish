@@ -281,12 +281,13 @@ def chi_dataset(ctd: xr.Dataset, casts: xr.Dataset, c1, ranges: pd.DataFrame,
         attrs["record_floor_n"] = [float(v) for v in rn]
         attrs["record_flatness_20hz"] = float(flat)
         ref = floor.at(rf)
-        if np.all(np.isfinite(rn)) and float(np.max(rn / ref)) > 10 and flat < 1.6:
+        ratio_20 = float(rn[2] / ref[2])
+        if np.all(np.isfinite(rn)) and ratio_20 > 10 and flat < 1.6:
             logger.warning(
-                "record floor estimate is %.1fx the shipped floor with a "
-                "flat lower tail (%.2f). The shipped floor may not suit this "
-                "record; see chi.noise per-entry override.",
-                float(np.max(rn / ref)), flat)
+                "record floor estimate is %.1fx the shipped floor at 20 Hz "
+                "with a flat lower tail (%.2f). The shipped floor may not "
+                "suit this record; see chi.noise per-entry override.",
+                ratio_20, flat)
     ds.attrs = attrs
     return ds
 

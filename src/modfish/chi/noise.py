@@ -17,6 +17,13 @@ import numpy as np
 # measured in motive-cruise-proc drafts/15 on 2026-09-06. Per frequency the
 # value is the median of the records within 1.5x of the minimum. The 4 Hz
 # cluster holds seven records across two cruises, both fish and four probes.
+# The cluster thins with frequency, from seven records at 4 Hz to four at
+# 10 and 20 Hz, three at 37.5 Hz, and one by 60 Hz, so above about 40 Hz
+# the floor comes from a single record and is the least determined part
+# of the spectrum. Bins above 40 Hz enter the band once the fall rate
+# exceeds 3.2 m/s and carry 37 percent of `chi_noise` at 4 m/s and above,
+# an error that runs toward over-subtraction because the envelope makes
+# each record's estimate an upper bound.
 _DEFAULT_NU = 11.04
 # 40 points, 3.994 to 159.8 Hz; the f = 0 DC bin is dropped, since linear
 # detrending leaves only a residual there. See the measurement note.
@@ -82,6 +89,22 @@ class NoiseFloor:
 
     @classmethod
     def from_file(cls, path) -> "NoiseFloor":
+        """Load a measured noise spectrum from an `.npz` file.
+
+        The file must carry the arrays `f` and `n` and the scalars `nu`,
+        `source`, `records`, `measured`, matching the `NoiseFloor` fields.
+        `source`, `records` and `measured` are stored as `str`.
+
+        Parameters
+        ----------
+        path : str or pathlib.Path
+            Path to the `.npz` file.
+
+        Returns
+        -------
+        NoiseFloor
+            The loaded spectrum.
+        """
         with np.load(pathlib.Path(path), allow_pickle=False) as z:
             return cls(f=np.asarray(z["f"], dtype=float),
                        n=np.asarray(z["n"], dtype=float),
@@ -97,8 +120,6 @@ def resolve(ref) -> "NoiseFloor | None":
     """
     if ref is None or ref == "":
         return None
-    if isinstance(ref, NoiseFloor):
-        return ref
     ref = str(ref)
     if ref.startswith("builtin:"):
         return NoiseFloor.from_builtin(ref[len("builtin:"):])
