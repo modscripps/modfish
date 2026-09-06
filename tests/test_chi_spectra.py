@@ -180,6 +180,12 @@ def test_run_range_flags():
     railed = x.copy(); railed[:50] = 2.5
     out = run_range(railed, FS, spd, dt_dc, P)
     assert out["flag"][0] & FLAG_RAIL and not (out["flag"][-1] & FLAG_RAIL)
+    # spd = 0.5 passes min_spd (the check is `s < params.min_spd`), but the
+    # wavenumber bin width (1 / nsec) / spd = 4 cpm leaves only k = 4, 8, 12
+    # inside (1, 12.5), three bins against min_bins = 4.
+    empty = spd.copy(); empty[0] = 0.5
+    out = run_range(x, FS, empty, dt_dc, P)
+    assert out["flag"][0] & FLAG_EMPTY and np.isnan(out["chi"][0])
     nf = NoiseFloor.from_builtin("fctd_2026")
     at_floor = rng.normal(1.5, np.sqrt(2.4e-10 * FS / 2), n)
     out = run_range(at_floor, FS, spd, dt_dc, P, noise=nf)
