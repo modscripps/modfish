@@ -5,7 +5,7 @@ import xarray as xr
 from modfish.chi import add_chi
 from modfish.chi.config import FLAG_MEANINGS, FLAG_N2, FLAG_NOENV, ChiParams
 from modfish.chi.load import load_c1
-from modfish.chi.pipeline import chi_dataset
+from modfish.chi.pipeline import _record_floor, chi_dataset
 from modfish.fctd.concat import concat_l0
 from modfish.fctd.config import FCTDConfig
 from modfish.fctd.l1 import make_l1
@@ -79,3 +79,43 @@ def test_nan_closure_input_flags_no_environment(l1_and_files):
     assert hit.sum() > 10
     assert np.all(ds.chi_flag.values[hit] & FLAG_NOENV)
     assert not np.any(ds.chi_flag.values[hit] & FLAG_N2)
+
+
+def test_chi_group_carries_phi_and_floor_provenance(l1_and_files):
+    l1, files = l1_and_files
+    params = ChiParams(enabled=True, gain=50.0, gain_source="synthetic")
+    chi = add_chi(l1, files, params)["chi"].to_dataset()
+    assert "phi" in chi.data_vars
+    assert chi["phi"].dims == ("time",)
+    for key in ("noise_source", "noise_records", "noise_measured", "noise_nu",
+                "record_floor_f", "record_floor_n", "record_flatness_20hz"):
+        assert key in chi.attrs, key
+    assert len(chi.attrs["record_floor_f"]) == len(chi.attrs["record_floor_n"])
+    assert "snr" not in chi.attrs and "noise_floor" not in chi.attrs
+
+
+def test_noise_none_leaves_phi_at_zero(l1_and_files):
+    l1, files = l1_and_files
+    params = ChiParams(enabled=True, gain=50.0, gain_source="synthetic", noise=None)
+    chi = add_chi(l1, files, params)["chi"].to_dataset()
+    assert float(chi["phi"].max()) == 0.0
+    assert "noise_source" not in chi.attrs
+
+
+def test_record_floor_pools_only_the_largest_frequency_grid():
+    """Two ranges of one deployment can produce different Welch grid
+    lengths (different `fs`). `_record_floor` must group diagnostic
+    entries by their frequency grid and pool the largest group instead of
+    concatenating mismatched arrays."""
+    rng = np.random.default_rng(0)
+    nu = 11.04
+    f_small = np.linspace(4.0, 160.0, 41)
+    f_big = np.linspace(4.0, 160.0, 82)
+    dep_small = rng.uniform(0, 100, size=50)
+    dep_big = rng.uniform(0, 100, size=1200)
+    P_small = rng.uniform(1e-10, 2e-10, size=(50, f_small.size))
+    P_big = rng.uniform(1e-10, 2e-10, size=(1200, f_big.size))
+    diag = [(P_small, dep_small, f_small), (P_big, dep_big, f_big)]
+    _, n, flat = _record_floor(diag, nu)
+    assert np.all(np.isfinite(n))
+    assert np.isfinite(flat)
