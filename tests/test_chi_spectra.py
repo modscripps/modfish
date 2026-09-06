@@ -9,8 +9,8 @@ from modfish.chi.spectra import (
     correct_spectrum,
     dtdc,
     integrate,
-    noise_kmax,
     run_range,
+    spectral_factor,
     window_slices,
     window_spectrum,
 )
@@ -47,25 +47,63 @@ def test_correct_spectrum_closed_form():
     assert Pk == pytest.approx(expected)
 
 
-def test_noise_kmax_and_flags():
-    f = np.linspace(0, FS / 2, 82)
+def test_spectral_factor_reproduces_correct_spectrum():
+    f = np.array([2.0, 10.0, 30.0])
+    Pf = np.array([1.0, 2.0, 3.0])
     spd = 3.0
-    Pf = np.full(f.size, 10 * P.snr * P.noise_floor)
-    assert noise_kmax(f, Pf, spd, P) == np.inf
-    Pf[f > 30.0] = 0.5 * P.noise_floor  # drops below 3x floor above 30 Hz = 10 cpm
-    assert noise_kmax(f, Pf, spd, P) == pytest.approx(10.0, abs=f[1] / spd)
-    assert noise_kmax(f, Pf, spd, ChiParams(enabled=True, gain=1.0, snr=0.0)) == np.inf
+    k, Pk = correct_spectrum(f, Pf, FS, spd, P)
+    assert Pk == pytest.approx(Pf * spectral_factor(f, FS, spd, P))
 
 
 def test_integrate_counts_bins_strictly_inside():
     k = np.arange(0.0, 20.0, 0.5)
     Pk = np.ones(k.size)
-    chi, n, k_hi = integrate(k, Pk, 1.0, 12.5, dtdc_val=10.0, D=1.4e-7)
+    chi, chi_noise, n, k_hi = integrate(k, Pk, None, 1.0, 12.5, dtdc_val=10.0, D=1.4e-7)
     assert n == int(((k > 1.0) & (k < 12.5)).sum())
     assert chi == pytest.approx(6 * 1.4e-7 * 100.0 * n * 0.5)
     assert k_hi == pytest.approx(12.0 + 0.25)  # last bin 12.0, half a bin above it
-    _, n0, k0 = integrate(k, Pk, 1.0, 1.2, dtdc_val=10.0, D=1.4e-7)
+    _, _, n0, k0 = integrate(k, Pk, None, 1.0, 1.2, dtdc_val=10.0, D=1.4e-7)
     assert n0 == 0 and np.isnan(k0)
+
+
+def test_integrate_subtracts_the_floor_inside_the_band():
+    k = np.arange(0.0, 20.0, 0.5)
+    Pk = np.full(k.size, 3.0)
+    Nk = np.full(k.size, 1.0)
+    chi, chi_noise, n, k_hi = integrate(k, Pk, Nk, 1.0, 12.5, dtdc_val=10.0, D=1.4e-7)
+    c = 6 * 1.4e-7 * 100.0 * 0.5
+    assert n == int(((k > 1.0) & (k < 12.5)).sum())
+    assert chi == pytest.approx(c * 2.0 * n)
+    assert chi_noise == pytest.approx(c * 1.0 * n)
+    assert k_hi == pytest.approx(12.25)
+
+
+def test_integrate_with_no_floor_matches_a_zero_floor():
+    k = np.arange(0.0, 20.0, 0.5)
+    Pk = np.full(k.size, 3.0)
+    a = integrate(k, Pk, None, 1.0, 12.5, dtdc_val=10.0, D=1.4e-7)
+    b = integrate(k, Pk, np.zeros(k.size), 1.0, 12.5, dtdc_val=10.0, D=1.4e-7)
+    assert a[0] == pytest.approx(b[0]) and a[1] == 0.0
+
+
+def test_integrate_never_clips_negative_bins():
+    """A window at the floor must average to zero across realizations.
+
+    Clipping per bin rectifies the estimator scatter and biases chi high
+    exactly where the correction matters most.
+    """
+    rng = np.random.default_rng(7)
+    k = np.arange(0.0, 20.0, 0.5)
+    Nk = np.full(k.size, 1.0)
+    nu = 11.04
+    chis = []
+    for _ in range(4000):
+        Pk = Nk * rng.chisquare(nu, k.size) / nu
+        chis.append(integrate(k, Pk, Nk, 1.0, 12.5, dtdc_val=10.0, D=1.4e-7)[0])
+    chis = np.array(chis)
+    scale = 6 * 1.4e-7 * 100.0 * 0.5 * int(((k > 1.0) & (k < 12.5)).sum())
+    assert abs(chis.mean()) < 0.05 * scale, "band sum is biased; is a clip present?"
+    assert (chis < 0).mean() == pytest.approx(0.5, abs=0.1)
 
 
 def test_window_slices():
@@ -100,7 +138,7 @@ def _synthetic_volts(eps, chi, spd, gain, seconds, params, seed=2):
 
 def test_chain_recovers_batchelor_chi():
     eps, chi, spd, gain = 1e-8, 1e-9, 3.0, 50.0
-    params = ChiParams(enabled=True, gain=gain, snr=0.0)
+    params = ChiParams(enabled=True, gain=gain)
     x, dt_dc = _synthetic_volts(eps, chi, spd, gain, seconds=120.0, params=params)
     starts, _ = window_slices(x.size, FS, params)
     nwin = starts.size
