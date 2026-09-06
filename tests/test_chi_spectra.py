@@ -4,6 +4,7 @@ from numpy.fft import irfft, rfftfreq
 
 from modfish.chi.batchelor import band_fraction, spectrum
 from modfish.chi.config import FLAG_EMPTY, FLAG_NOISE, FLAG_RAIL, FLAG_SLOW, ChiParams
+from modfish.chi.noise import NoiseFloor
 from modfish.chi.response import antialias, derivative, preemphasis_inverse
 from modfish.chi.spectra import (
     correct_spectrum,
@@ -179,10 +180,13 @@ def test_run_range_flags():
     railed = x.copy(); railed[:50] = 2.5
     out = run_range(railed, FS, spd, dt_dc, P)
     assert out["flag"][0] & FLAG_RAIL and not (out["flag"][-1] & FLAG_RAIL)
-    quiet = rng.normal(1.5, np.sqrt(0.2 * P.noise_floor * FS / 2), n)  # below the floor
-    out = run_range(quiet, FS, spd, dt_dc, P)
-    assert np.all(out["flag"] & FLAG_EMPTY) and np.isnan(out["chi"]).all()
-    assert np.all(out["flag"] & FLAG_NOISE)  # the cut fired below both caps
+    nf = NoiseFloor.from_builtin("fctd_2026")
+    at_floor = rng.normal(1.5, np.sqrt(2.4e-10 * FS / 2), n)
+    out = run_range(at_floor, FS, spd, dt_dc, P, noise=nf)
+    assert np.isfinite(out["chi"]).all(), "the noise path must never produce NaN"
+    assert np.all(out["flag"] & FLAG_NOISE), "a window at the floor is noise-dominated"
+    assert (out["chi"] < 0).any(), "at the floor, scatter must send some windows negative"
+    assert np.nanmedian(out["phi"]) > 0.5
     out = run_range(x, FS, spd, np.full(nwin, np.nan), P)
     assert np.isnan(out["chi"]).all() and np.all(out["flag"] & 64)
 
@@ -201,3 +205,47 @@ def test_run_range_checks_the_per_window_lengths():
         run_range(x, FS, spd[:-1], dt_dc, P)
     with pytest.raises(ValueError, match="one entry per window"):
         run_range(x, FS, spd, dt_dc[:-1], P)
+
+
+def test_run_range_kmax_no_longer_depends_on_the_spectrum():
+    rng = np.random.default_rng(11)
+    n = int(10 * FS)
+    loud = rng.normal(1.5, 1e-3, n)
+    quiet = rng.normal(1.5, 1e-7, n)
+    starts, _ = window_slices(n, FS, P)
+    spd = np.full(starts.size, 3.0)
+    dt_dc = np.full(starts.size, 10.0)
+    nf = NoiseFloor.from_builtin("fctd_2026")
+    a = run_range(loud, FS, spd, dt_dc, P, noise=nf)
+    b = run_range(quiet, FS, spd, dt_dc, P, noise=nf)
+    assert a["kmax"] == pytest.approx(b["kmax"], nan_ok=True)
+
+
+def test_run_range_phi_brackets():
+    rng = np.random.default_rng(12)
+    n = int(10 * FS)
+    starts, _ = window_slices(n, FS, P)
+    spd = np.full(starts.size, 3.0)
+    dt_dc = np.full(starts.size, 10.0)
+    nf = NoiseFloor.from_builtin("fctd_2026")
+    loud = rng.normal(1.5, 1e-3, n)
+    out = run_range(loud, FS, spd, dt_dc, P, noise=nf)
+    assert np.nanmedian(out["phi"]) < 0.05, "signal far above the floor"
+    off = run_range(loud, FS, spd, dt_dc, P, noise=None)
+    assert np.all(off["phi"] == 0.0)
+    assert not np.any(off["flag"] & FLAG_NOISE)
+
+
+def test_run_range_diagnostic_subsample():
+    rng = np.random.default_rng(13)
+    n = int(20 * FS)
+    x = rng.normal(1.5, 1e-3, n)
+    starts, _ = window_slices(n, FS, P)
+    spd = np.full(starts.size, 3.0)
+    dt_dc = np.full(starts.size, 10.0)
+    out = run_range(x, FS, spd, dt_dc, P, noise=None, diag_stride=7)
+    assert out["diag_Pf"].shape[0] == out["diag_idx"].size
+    assert out["diag_Pf"].shape[1] == out["diag_f"].size
+    assert np.all(np.diff(out["diag_idx"]) == 7)
+    off = run_range(x, FS, spd, dt_dc, P, noise=None, diag_stride=0)
+    assert off["diag_idx"].size == 0 and off["diag_Pf"].size == 0
