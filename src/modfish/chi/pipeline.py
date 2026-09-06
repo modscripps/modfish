@@ -110,9 +110,9 @@ def _record_floor(diag, nu, deep_frac=80, qs=(0.02, 0.05, 0.30),
         return ref, np.full(ref.size, np.nan), np.nan
     # Each range carries its own fs, and run_range's Welch grid depends on
     # fs, so two ranges of one deployment can produce frequency grids of
-    # different length (or the same length from a different fs). Pool only
-    # the entries that share a grid, keeping the largest such group, rather
-    # than assuming every range in the deployment agrees.
+    # different length (or the same length from a different fs). Ranges in
+    # one deployment do not always share a grid, so pool only the entries
+    # that share one, keeping the largest group.
     groups = {}
     for Pf, dep, fg in diag:
         groups.setdefault(np.asarray(fg, dtype=float).tobytes(), []).append((Pf, dep, fg))
@@ -193,6 +193,15 @@ def chi_dataset(ctd: xr.Dataset, casts: xr.Dataset, c1, ranges: pd.DataFrame,
     spd16 = np.gradient(ctd["depth"].values.astype(float)) * fs16
     spd16 = np.abs(uniform_filter1d(spd16, max(int(round(params.spd_smooth * fs16)), 1), mode="nearest"))
 
+    # _record_floor pools across ranges, so size the stride from the
+    # deployment's total window count. Targeting about 5000 retained
+    # spectra leaves roughly 1000 in the deepest 20 percent whatever way
+    # the record is split into ranges. 5000 x 82 bins x 8 bytes is 3.3 MB.
+    total_win = sum(int(r.n) / (params.step * float(r.fs))
+                    for _, r in ranges.iterrows()
+                    if np.isfinite(r.fs) and r.n >= 2)
+    stride = 0 if floor is None else max(int(round(total_win / 5000)), 1)
+
     pieces = []
     diag = []
     for rid, r in ranges.iterrows():
@@ -212,10 +221,6 @@ def chi_dataset(ctd: xr.Dataset, casts: xr.Dataset, c1, ranges: pd.DataFrame,
         spd = _interp_at(centers_ns, time_ns, spd16)
         dt_dc = dtdc(env["SP"], env["t"], env["p"])
         seg = c1[int(r.i0):int(r.i0) + int(r.n)]
-        # retain about 1000 spectra per range: 82 bins x 8 bytes x 1000 is
-        # 0.66 MB, so d12's ~40 ranges cost about 26 MB
-        n_win_est = int(r.n) / (params.step * float(r.fs))
-        stride = max(int(round(n_win_est / 1000)), 1)
         out = run_range(seg, float(r.fs), spd, dt_dc, params,
                         noise=floor, diag_stride=stride)
         pieces.append(xr.Dataset(

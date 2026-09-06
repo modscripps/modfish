@@ -102,6 +102,20 @@ def test_noise_none_leaves_phi_at_zero(l1_and_files):
     assert "noise_source" not in chi.attrs
 
 
+def test_chi_group_record_floor_estimate_is_finite_on_the_fixture(l1_and_files):
+    """End-to-end: `add_chi`'s diagnostic capture and `_record_floor`'s
+    consumption of it (the `env["depth"][diag_idx]` indexing, the
+    multi-range `diag` accumulation, the real array shapes) must line up
+    well enough that the fixture clears both spectrum-count guards, not
+    just the hand-built-tuple path exercised above."""
+    l1, files = l1_and_files
+    params = ChiParams(enabled=True, gain=50.0, gain_source="synthetic")
+    chi = add_chi(l1, files, params)["chi"].to_dataset()
+    assert np.all(np.isfinite(chi.attrs["record_floor_n"]))
+    assert np.all(np.array(chi.attrs["record_floor_n"]) > 0)
+    assert np.isfinite(chi.attrs["record_flatness_20hz"])
+
+
 def test_record_floor_pools_only_the_largest_frequency_grid():
     """Two ranges of one deployment can produce different Welch grid
     lengths (different `fs`). `_record_floor` must group diagnostic
