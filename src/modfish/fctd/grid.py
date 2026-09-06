@@ -192,7 +192,15 @@ def grid_casts(l1: xr.DataTree, params: GridParams | None = None) -> xr.Dataset:
         from those bin means, but `chi_flag`'s bitwise-or still covers
         every window, so a bin can carry those bits without them having
         contributed to the mean. Bit 2, noise-dominated, does not exclude
-        a window from the means: a small signal is a valid estimate.
+        a window from the means: a small signal is a valid estimate. The
+        gridded `chi` is censored at zero: `_bin_geomean` masks
+        non-positive values to NaN before averaging, so a negative chi
+        never reaches the gridded product even though the window-level
+        value keeps it. Within a bin, `chi` averages only the
+        non-excluded windows that are also positive, `phi` averages
+        every non-excluded window, and the gap between those two window
+        sets widens where `phi` is high, so a high `phi` in a bin is not
+        itself a statement about the windows behind that bin's `chi`.
     """
     if params is None:
         params = GridParams()

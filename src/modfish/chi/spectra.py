@@ -148,7 +148,8 @@ def integrate(k, Pk, Nk, kmin, kmax, dtdc_val, D):
         K^2/s, may be negative when the window sits at the floor. NaN when
         no bin survives.
     chi_noise : float
-        K^2/s, the noise part of the same band. 0.0 when `Nk` is None.
+        K^2/s, the noise part of the same band. 0.0 when `Nk` is None,
+        NaN when no bin survives regardless of `Nk`.
     n_bins : int
         Number of bins strictly inside `(kmin, kmax)`.
     k_hi : float
@@ -228,7 +229,7 @@ def run_range(c1, fs, spd, dtdc_val, params: ChiParams, noise=None, diag_stride=
         `diag_stride`, restricted to windows that reached the spectrum
         (0 disables capture). Because the stride runs over the absolute
         index rather than a counter over retained windows, skipped
-        windows (rail, no-environment, slow) make the capture undershoot
+        windows (no-environment, slow) make the capture undershoot
         `range_windows / diag_stride`; this is deliberate, since striding
         on the absolute index samples uniformly in time regardless of
         skips. Default 0.
