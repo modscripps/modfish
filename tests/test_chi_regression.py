@@ -124,9 +124,10 @@ def test_floor_on_lowers_chi(tmp_path):
 
     This records the offset the reprocess should expect. It is not a
     fidelity check against the shipboard column, which was computed with no
-    noise handling at all. The positive-value filter drops any bin the floor
-    pushes to or below zero, so the measured drop is a lower bound on the
-    true one.
+    noise handling at all. The filter keeps only bins positive in both runs,
+    so it drops the bins the floor pushed to or below zero and any bin
+    already non-positive in the off run, and the measured drop is therefore
+    a lower bound on the true one.
     """
     cast = sorted(CASTS)[0]
     off, _ = _run_cast(tmp_path / "off", *CASTS[cast], noise=None)
@@ -134,7 +135,7 @@ def test_floor_on_lowers_chi(tmp_path):
     both = np.isfinite(off) & np.isfinite(on) & (off > 0) & (on > 0)
     assert both.sum() > 20, "too few depth bins survive to compare"
     d = np.log10(on[both]) - np.log10(off[both])
-    assert np.median(d) <= 0.0, "the floor can only remove power"
+    assert np.median(d) < -0.01, "the floor is inert; chi did not move"
     assert np.median(d) > -0.5, "a median drop past 0.5 dex means over-subtraction"
     print(f"floor-on offset on {cast}: median {np.median(d):+.3f} dex over "
           f"{both.sum()} bins, {(on <= 0).sum()} bins driven non-positive")
