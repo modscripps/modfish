@@ -19,8 +19,10 @@ def test_defaults_match_spec():
     assert p.enabled is False
     assert p.gain is None
     assert p.antialias == "som_sinc4"
-    assert p.noise_floor == 1e-9
-    assert p.snr == 3.0
+    assert p.noise == "builtin:fctd_2026"
+    assert p.phi_max == 0.5
+    assert not hasattr(p, "snr")
+    assert not hasattr(p, "noise_floor")
     assert (p.kmin, p.kmax_cap, p.fmax_cap) == (1.0, 12.5, 50.0)
     assert p.min_spd == 0.5
     assert (p.window, p.step, p.nsec) == (2.0, 0.25, 0.5)
@@ -39,7 +41,7 @@ def test_defaults_match_spec():
 def test_flags_are_distinct_bits_and_documented():
     bits = [FLAG_SLOW, FLAG_NOISE, FLAG_EMPTY, FLAG_RRHO]
     assert bits == [1, 2, 4, 128]
-    for word in ("slow", "noise_limited", "band_empty", "eps_table_edge", "n2_not_positive",
+    for word in ("slow", "noise_dominated", "band_empty", "eps_table_edge", "n2_not_positive",
                  "rail", "no_closure_inputs", "rrho_capped"):
         assert word in FLAG_MEANINGS
 
