@@ -186,12 +186,13 @@ def grid_casts(l1: xr.DataTree, params: GridParams | None = None) -> xr.Dataset:
         the `casts` group), `direction` (from `casts`), `time`/`lon`/`lat`
         (per-cast means over that cast's samples). Attrs copied from
         `ctd`, plus `dz`. When the tree carries a `chi` group, `chi`,
-        `chi_tot`, `eps_chi` (geometric bin means), `r`, `kmax` (bin
+        `chi_tot`, `eps_chi` (geometric bin means), `r`, `kmax`, `phi` (bin
         means) and `chi_flag` (bitwise or) are added over `(depth,
         cast)`. Windows flagged `FLAG_SLOW` or `FLAG_EMPTY` are excluded
         from those bin means, but `chi_flag`'s bitwise-or still covers
         every window, so a bin can carry those bits without them having
-        contributed to the mean.
+        contributed to the mean. Bit 2, noise-dominated, does not exclude
+        a window from the means: a small signal is a valid estimate.
     """
     if params is None:
         params = GridParams()
@@ -238,7 +239,7 @@ def grid_casts(l1: xr.DataTree, params: GridParams | None = None) -> xr.Dataset:
     if "chi" in l1.children:
         chi = l1["chi"].to_dataset()
         geo = [n for n in ("chi", "chi_tot", "eps_chi") if n in chi]
-        arith = [n for n in ("r", "kmax") if n in chi]
+        arith = [n for n in ("r", "kmax", "phi") if n in chi]
         for name in geo + arith:
             chi_grid[name] = np.full((n_depth, n_casts), np.nan)
         chi_grid["chi_flag"] = np.zeros((n_depth, n_casts), dtype=np.uint8)
