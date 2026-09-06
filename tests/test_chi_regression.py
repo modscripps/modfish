@@ -72,7 +72,8 @@ def _bin_mean(depth, values, edges):
     return out
 
 
-def _run_cast(tmp_path, start, end):
+def _run_cast(tmp_path, start, end, noise=None):
+    tmp_path.mkdir(parents=True, exist_ok=True)
     start, end = np.datetime64(start), np.datetime64(end)
     raw = [f for f in sorted(RAW.glob("*.modraw"))
            if start - LOOKBACK <= parse_filename_datetime(f) <= end + PAD]
@@ -81,7 +82,7 @@ def _run_cast(tmp_path, start, end):
     modfish.modraw.convert(raw, l0_dir)
     files = sorted(l0_dir.glob("*.nc"))
     l1 = make_l1(concat_l0(files, groups=("ctd", "gps")), FCTDConfig())
-    params = ChiParams(enabled=True, gain=8.8, antialias="ap00_sinc2", snr=0.0, closure=False)
+    params = ChiParams(enabled=True, gain=8.8, antialias="ap00_sinc2", noise=noise, closure=False)
     chi = add_chi(l1, files, params)["chi"].to_dataset()
     c1, ranges = load_c1(files)
     edge = np.zeros(chi.sizes["time"], dtype=bool)
@@ -115,3 +116,25 @@ def test_d07_cast_within_bias_budget(tmp_path, matlab, cast):
     print(f"cast {cast}: n={both.sum()} median dlog10={median:+.4f} MAD={mad:.4f}")
     assert abs(median) < TOL
     assert mad < TOL
+
+
+@needs_data
+def test_floor_on_lowers_chi(tmp_path):
+    """Subtracting the floor can only remove power.
+
+    This records the offset the reprocess should expect. It is not a
+    fidelity check against the shipboard column, which was computed with no
+    noise handling at all. The positive-value filter drops any bin the floor
+    pushes to or below zero, so the measured drop is a lower bound on the
+    true one.
+    """
+    cast = sorted(CASTS)[0]
+    off, _ = _run_cast(tmp_path / "off", *CASTS[cast], noise=None)
+    on, _ = _run_cast(tmp_path / "on", *CASTS[cast], noise="builtin:fctd_2026")
+    both = np.isfinite(off) & np.isfinite(on) & (off > 0) & (on > 0)
+    assert both.sum() > 20, "too few depth bins survive to compare"
+    d = np.log10(on[both]) - np.log10(off[both])
+    assert np.median(d) <= 0.0, "the floor can only remove power"
+    assert np.median(d) > -0.5, "a median drop past 0.5 dex means over-subtraction"
+    print(f"floor-on offset on {cast}: median {np.median(d):+.3f} dex over "
+          f"{both.sum()} bins, {(on <= 0).sum()} bins driven non-positive")
