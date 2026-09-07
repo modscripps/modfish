@@ -32,6 +32,7 @@ of trusting the header.
 | `ecop` | `$ECOP` | Tridente fluorometer/backscatter | ~32 blocks/s on MOTIVE 2025 files, not the 16 Hz the Matlab reader assumes; timestamps duplicate and some payloads are binary garbage |
 | `gps` | `$GPGGA`/`$INGGA` dated by `$GPZDA`/`$INZDA` | position fixes | on demand |
 | `alti` | `$ALTI` | altimeter distance | on demand; frame layout is unverified, no `$ALTI` frame found in any sampled MOTIVE file |
+| `vnav` | `$VNAV` | VectorNav mag/accel/gyro | 40 Hz, measured on a 2024 and a 2025 file |
 
 A group is present only when its stream has data. `ctd` also needs
 calibration coefficients, from the header or a `$DCAL` block.
