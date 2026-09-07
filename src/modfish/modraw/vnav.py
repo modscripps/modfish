@@ -64,11 +64,12 @@ def decode_vnmar_bytes(body: bytes) -> xr.Dataset:
 
 
 # Joining payloads before scanning would lose a sentence split across two
-# packets. Checked directly against tests/data/EPSI_modraw_excerpt_2024.
-# modraw: every one of its 138 $VNAV payloads starts with a full 16-hex
-# timestamp + $VNMAR and ends with \r\n, so scanning each payload on its own
-# and scanning the joined bytes both find the same 1380 sentences. No split
-# sentence has been observed there or checked for in any other fixture.
+# packets. Checked directly against
+# tests/data/EPSI_modraw_excerpt_2024.modraw: every one of its 138 $VNAV
+# payloads starts with a full 16-hex timestamp + $VNMAR and ends with
+# \r\n, so scanning each payload on its own and scanning the joined bytes
+# both find the same 1380 sentences. No split sentence has been observed
+# there or checked for in any other fixture.
 def decode_vnmar(packets: list[Packet]) -> xr.Dataset:
     """Decode framed `$VNAV` packets into a VectorNav time series."""
     return decode_vnmar_bytes(b"".join(p.payload for p in packets))
