@@ -27,6 +27,7 @@ from .framer import frame
 from .gps import decode_gga
 from .header import header_setup, parse_dcal, parse_som3, read_header, sbe49_cal
 from .sb49 import decode_sb49
+from .vnav import decode_vnmar
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +66,9 @@ def read(file):
           present only when the file has at least one GGA sentence.
         - `alti` : altimeter distance (`decode_alti`), present only when the
           file has `$ALTI` blocks.
+        - `vnav` : VectorNav mag/accel/gyro time series (`decode_vnmar`),
+          decoded from `$VNMAR` sentences carried in `$VNAV` blocks, present
+          only when the file has `$VNAV` blocks.
 
         A group is present only when its stream has data; a file with none
         of the above raises `ValueError`.
@@ -101,8 +105,8 @@ def read(file):
     Raises
     ------
     ValueError
-        If none of the known streams (`ctd`, `efe`, `ecop`, `gps`, `alti`)
-        yielded any data.
+        If none of the known streams (`ctd`, `efe`, `ecop`, `gps`, `alti`,
+        `vnav`) yielded any data.
     """
     file = Path(file)
     head = read_header(file)
@@ -146,6 +150,8 @@ def read(file):
         groups["gps"] = gga
     if by_tag.get("ALTI"):
         groups["alti"] = decode_alti(by_tag["ALTI"])
+    if by_tag.get("VNAV"):
+        groups["vnav"] = decode_vnmar(by_tag["VNAV"])
 
     if not groups:
         raise ValueError(f"no decodable data streams in {file}")
