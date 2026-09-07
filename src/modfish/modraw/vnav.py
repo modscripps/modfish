@@ -3,8 +3,11 @@
 `$VNAV` SOM frames carry batches of `$VNMAR` ASCII sentences, the VectorNav
 magnetic, acceleration and angular-rate register. Each sentence is preceded
 by its own 16-hex millisecond timestamp and ends with the NMEA XOR checksum
-over the bytes between `$` and `*`. Observed at 40.0 Hz on both MOTIVE
-cruises.
+over the bytes between `$` and `*`. Observed at 40.0 Hz (25 ms median
+sentence spacing) on both MOTIVE cruises:
+`tests/data/EPSI_modraw_excerpt_2024.modraw` (138 `$VNAV` frames, 1380
+`$VNMAR` sentences) from 2024, and `FCTD25_12_09_183408.modraw` from 2025
+d09 (1106 `$VNAV` frames, 11060 `$VNMAR` sentences).
 """
 
 import re
@@ -60,6 +63,12 @@ def decode_vnmar_bytes(body: bytes) -> xr.Dataset:
     return ds
 
 
+# Joining payloads before scanning would lose a sentence split across two
+# packets. Checked directly against tests/data/EPSI_modraw_excerpt_2024.
+# modraw: every one of its 138 $VNAV payloads starts with a full 16-hex
+# timestamp + $VNMAR and ends with \r\n, so scanning each payload on its own
+# and scanning the joined bytes both find the same 1380 sentences. No split
+# sentence has been observed there or checked for in any other fixture.
 def decode_vnmar(packets: list[Packet]) -> xr.Dataset:
     """Decode framed `$VNAV` packets into a VectorNav time series."""
     return decode_vnmar_bytes(b"".join(p.payload for p in packets))
