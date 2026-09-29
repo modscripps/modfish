@@ -66,3 +66,10 @@ def test_from_dict_groups_list_becomes_tuple():
 
 def test_groups_default_is_none():
     assert FCTDConfig().groups is None
+
+
+def test_from_dict_accepts_thermal_mass_profile():
+    prof = {"p": [150.0, 1000.0], "product": [0.12, 0.24]}
+    cfg = FCTDConfig.from_dict({"tc": {"thermal_mass": True, "beta": 1 / 12, "thermal_mass_profile": prof}})
+    assert cfg.tc.thermal_mass_profile == prof
+    assert FCTDConfig().tc.thermal_mass_profile is None

@@ -841,3 +841,94 @@ def test_uniform_slots_counts_a_gap_against_the_median_step():
     assert dt == pytest.approx(0.0625, abs=1e-4)
     assert n_slots == n
     assert np.array_equal(slots, np.arange(n))
+
+
+# --- thermal mass with a pressure profile of alpha * tau (modscripps/modfish#36) ---
+
+
+def _steady_ramp(minutes=120, fs=16.0, dtdt=-0.002, p_max=1200.0):
+    """A record whose temperature falls at a constant rate while pressure ramps up."""
+    n = int(fs * 60 * minutes)
+    time = np.datetime64("2024-11-20") + (np.arange(n) / fs * 1e9).astype("timedelta64[ns]")
+    ts = np.arange(n) / fs
+    return xr.Dataset(
+        coords=dict(time=("time", time)),
+        data_vars=dict(
+            t=("time", 20.0 + dtdt * ts),
+            c=("time", np.full(n, 4.0)),
+            p=("time", np.linspace(0.0, p_max, n)),
+            dPdt=("time", np.full(n, p_max / ts[-1])),
+        ),
+    )
+
+
+def test_thermal_mass_constant_profile_equals_scalar_path():
+    ds = make_synthetic_ctd(minutes=5)
+    beta = 1 / 12
+    ref = tc.thermal_mass_correction(ds, alpha=0.01, beta=beta)
+    prof = {"p": [0.0, 1000.0], "product": [0.01 / beta, 0.01 / beta]}
+    out = tc.thermal_mass_correction(ds, alpha=0.5, beta=beta, profile=prof)
+    np.testing.assert_allclose(out.c.data, ref.c.data, rtol=0, atol=1e-15)
+
+
+def test_thermal_mass_profile_follows_product_in_steady_state():
+    ds = _steady_ramp()
+    beta = 1 / 12
+    prof = {"p": [200.0, 1000.0], "product": [0.10, 0.30]}
+    out = tc.thermal_mass_correction(ds, alpha=0.01, beta=beta, dcdt="constant", profile=prof)
+    ctm = out.c.data - ds.c.data
+    expected = np.interp(ds.p.data, prof["p"], prof["product"]) * 0.1 * (-0.002)
+    far = np.arange(ds.sizes["time"]) > int(16.0 * 60)  # past five relaxation times
+    np.testing.assert_allclose(ctm[far], expected[far], rtol=0.01)
+
+
+def test_correct_with_profile_on_gapped_record_keeps_p_and_finite_c():
+    full, gapped, kept = make_gapped_pair()
+    prof = {"p": [100.0, 500.0], "product": [0.12, 0.24]}
+    out = tc.correct(gapped, lag=0.03, tau_t=0.05, lowpass=5.0, thermal_mass=True,
+                     beta=1 / 12, thermal_mass_profile=prof)
+    assert np.isfinite(out.c.data).all()
+    np.testing.assert_array_equal(out.p.data, gapped.p.data)
+
+
+def test_correct_with_profile_stamps_it_in_the_attrs():
+    ds = make_synthetic_ctd(minutes=5)
+    prof = {"p": [100.0, 500.0], "product": [0.12, 0.24]}
+    out = tc.correct(ds, thermal_mass=True, beta=1 / 12, thermal_mass_profile=prof)
+    assert "thermal mass" in out.c.attrs["processing"]
+    assert "product" in out.c.attrs["processing"]
+    assert "0.24" in out.attrs["corrections"]
+
+
+@pytest.mark.parametrize(
+    "prof",
+    [
+        {"p": [0.0, 100.0], "product": [0.1]},
+        {"p": [100.0, 100.0], "product": [0.1, 0.2]},
+        {"p": [0.0, 100.0], "product": [0.1, 0.0]},
+        {"p": [0.0, 100.0]},
+    ],
+)
+def test_thermal_mass_profile_malformed_raises(prof):
+    ds = make_synthetic_ctd(minutes=1)
+    with pytest.raises(ValueError):
+        tc.thermal_mass_correction(ds, beta=1 / 12, profile=prof)
+
+
+def test_thermal_mass_profile_without_p_raises():
+    ds = make_synthetic_ctd(minutes=1).drop_vars("p")
+    with pytest.raises(ValueError, match="p"):
+        tc.thermal_mass_correction(ds, beta=1 / 12, profile={"p": [0.0, 1.0], "product": [0.1, 0.2]})
+
+
+def test_thermal_mass_profile_scales_the_output_of_a_unit_product_recursion():
+    # every sample gets the correction a record with one constant product,
+    # the product at that sample's pressure, would get; the heat the cell
+    # carries from shallower or deeper water does not bring its own product
+    ds = make_synthetic_ctd(minutes=10)
+    beta = 1 / 12
+    prof = {"p": [0.0, 300.0], "product": [0.05, 0.40]}
+    unit = tc.thermal_mass_correction(ds, alpha=1.0 * beta, beta=beta)
+    expected = ds.c.data + np.interp(ds.p.data, prof["p"], prof["product"]) * (unit.c.data - ds.c.data)
+    out = tc.thermal_mass_correction(ds, beta=beta, profile=prof)
+    np.testing.assert_allclose(out.c.data, expected, rtol=0, atol=1e-12)
