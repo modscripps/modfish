@@ -931,7 +931,11 @@ def response_correction(
 
 
 def thermal_mass_correction(
-    ds: xr.Dataset, alpha: float = 0.03, beta: float = 1 / 7, dcdt: str = "sbe"
+    ds: xr.Dataset,
+    alpha: float = 0.03,
+    beta: float = 1 / 7,
+    dcdt: str = "sbe",
+    profile: dict | None = None,
 ) -> xr.Dataset:
     """Correct conductivity for the thermal mass of the conductivity cell.
 
@@ -967,6 +971,14 @@ def thermal_mass_correction(
         & Picklo (1990) and the dead MATLAB toolbox branch used
         throughout. The two agree exactly at 20 degC; over 3 to 27 degC
         they differ by up to about 10% (see the table below).
+    profile : dict or None, optional
+        Pressure profile of the product `alpha / beta` (`alpha * tau`,
+        seconds), as `{"p": [...], "product": [...]}` with `p` [dbar]
+        strictly increasing and every `product` positive. The product is
+        linear in pressure between knots and held at the end values
+        beyond them. When given, each sample takes
+        `alpha_i = product(p_i) * beta`, `ds` must carry `p`, and the
+        scalar `alpha` is not used. Defaults to None (constant `alpha`).
 
     Returns
     -------
@@ -980,8 +992,10 @@ def thermal_mass_correction(
     Raises
     ------
     ValueError
-        If `alpha` is not positive, if `dcdt` is neither `"sbe"` nor
-        `"constant"`, or if `ds.time` has a step of zero or less, which
+        If `alpha` is not positive (without a profile), if `dcdt` is
+        neither `"sbe"` nor `"constant"`, if `profile` is malformed or
+        given for a `ds` without `p`, or if `ds.time` has a step of zero
+        or less, which
         `_uniform_slots` refuses because two samples would fall in the
         same slot of the uniform grid.
 
@@ -1029,6 +1043,13 @@ def thermal_mass_correction(
     previous loop; the `lfilter` call itself accounts for 0.03 s of that,
     the rest being the deep copy, gap fill and gamma computation.
 
+    With a pressure profile, `alpha` varies per sample at fixed `beta`.
+    `aa` is linear in `alpha`, so `bb = 1 - 2 aa / alpha
+    = 1 - 2 (4 fn / beta) / (1 + 4 fn / beta)` does not depend on `alpha`,
+    and a per-sample `alpha` only scales the filter input. `lfilter` then
+    still applies. Where the product changes slowly against `1 / beta`,
+    the steady-state correction is `product(p) * dc/dT * dT/dt`.
+
     The record is laid out on a uniform time grid at its own sampling
     interval (`_on_uniform_grid`) before the recursion runs, so a time
     gap arrives as a run of missing samples that the gap fill bridges
@@ -1037,11 +1058,14 @@ def thermal_mass_correction(
     few time constants. A record without a gap is corrected as it is,
     with no re-laying.
     """
-    if alpha <= 0:
+    if profile is None and alpha <= 0:
         raise ValueError(
             "alpha must be positive; set thermal_mass=False to disable the "
             "thermal-mass step"
         )
+    knots = _check_tm_profile(profile) if profile is not None else None
+    if knots is not None and "p" not in ds:
+        raise ValueError("a thermal-mass profile needs pressure `p` in ds")
     if dcdt not in ("sbe", "constant"):
         raise ValueError(f"dcdt must be 'sbe' or 'constant', got {dcdt!r}")
 
@@ -1062,8 +1086,16 @@ def thermal_mass_correction(
         dTp = np.diff(T, prepend=T[0])
         dTp[0] = dTp[1]
 
-        aa = 4 * fn * alpha / beta / (1 + 4 * fn / beta)
-        bb = 1 - 2 * aa / alpha
+        if knots is None:
+            aa = 4 * fn * alpha / beta / (1 + 4 * fn / beta)
+            bb = 1 - 2 * aa / alpha
+        else:
+            # p carries NaN at gap slots when this runs inside `correct`'s
+            # uniform grid, so it is filled like t before the lookup
+            P, _ = _fill_gaps(ds.p.data)
+            alpha_i = np.interp(P, knots[0], knots[1]) * beta
+            aa = 4 * fn * alpha_i / beta / (1 + 4 * fn / beta)
+            bb = 1 - 2 * (4 * fn / beta) / (1 + 4 * fn / beta)
         x = aa * gamma * dTp
         x[0] = 0.0  # the loop starts at index 1 with ctm[0] = 0
         ctm = signal.lfilter([1.0], [1.0, bb], x)
@@ -1073,7 +1105,52 @@ def thermal_mass_correction(
         ds["c"] = (ds.c.dims, c_out, ds.c.attrs)
         return ds
 
-    return _on_uniform_grid(ds, ("t", "c"), _apply)
+    variables = ("t", "c") if knots is None else ("t", "c", "p")
+    return _on_uniform_grid(ds, variables, _apply)
+
+
+def _check_tm_profile(profile) -> tuple[np.ndarray, np.ndarray]:
+    """Validate a thermal-mass profile and return its knots as arrays.
+
+    Parameters
+    ----------
+    profile : mapping
+        `{"p": [...], "product": [...]}`, see `thermal_mass_correction`.
+
+    Returns
+    -------
+    p, product : numpy.ndarray
+        Knot pressures [dbar] and products [s], float, 1-D.
+
+    Raises
+    ------
+    ValueError
+        If a key is missing, the arrays are not 1-D of equal length at
+        least 1, `p` is not strictly increasing, or a product is not
+        positive and finite.
+    """
+    try:
+        p = np.asarray(profile["p"], dtype=float)
+        prod = np.asarray(profile["product"], dtype=float)
+    except (KeyError, TypeError) as err:
+        raise ValueError(
+            'thermal-mass profile must be {"p": [...], "product": [...]}'
+        ) from err
+    if p.ndim != 1 or prod.ndim != 1 or p.size == 0 or p.size != prod.size:
+        raise ValueError("thermal-mass profile p and product must be 1-D of equal length")
+    if np.any(np.diff(p) <= 0) or not np.isfinite(p).all():
+        raise ValueError("thermal-mass profile p must be finite and strictly increasing")
+    if not (np.isfinite(prod).all() and np.all(prod > 0)):
+        raise ValueError("thermal-mass profile products must be positive and finite")
+    return p, prod
+
+
+def _format_tm_profile(profile) -> str:
+    """Compact text form of a thermal-mass profile for the processing attrs."""
+    p, prod = _check_tm_profile(profile)
+    ps = ", ".join(f"{v:g}" for v in p)
+    qs = ", ".join(f"{v:g}" for v in prod)
+    return f"p=[{ps}] product=[{qs}]"
 
 
 def viscous_heating_temperature_correction(v, Pr: float = 12.4) -> np.ndarray:
@@ -1612,6 +1689,7 @@ def correct(
     beta: float = 1 / 7,
     viscous_heating: bool = False,
     pr: float = 12.4,
+    thermal_mass_profile: dict | None = None,
 ) -> xr.Dataset:
     """Apply the T-C sensor response correction chain to a CTD record.
 
@@ -1697,6 +1775,10 @@ def correct(
     pr : float, optional
         Prandtl number, passed to
         `viscous_heating_temperature_correction`. Defaults to 12.4.
+    thermal_mass_profile : dict or None, optional
+        Pressure profile of the thermal-mass product `alpha * tau`,
+        passed to `thermal_mass_correction` as `profile`. When given, the
+        scalar `alpha` is not used. Defaults to None.
 
     Returns
     -------
@@ -1774,10 +1856,15 @@ def correct(
             t_steps.append(f"response lag {lag:.3f} s tau {tau_t:.3f} s")
             corrections.append(f"response_correction(lag={lag}, tau_t={tau_t})")
 
-        if thermal_mass:
+        if thermal_mass and thermal_mass_profile is None:
             ds = thermal_mass_correction(ds, alpha=alpha, beta=beta)
             c_steps.append(f"thermal mass alpha={alpha} beta={beta}")
             corrections.append(f"thermal_mass_correction(alpha={alpha}, beta={beta})")
+        elif thermal_mass:
+            ds = thermal_mass_correction(ds, beta=beta, profile=thermal_mass_profile)
+            text = _format_tm_profile(thermal_mass_profile)
+            c_steps.append(f"thermal mass beta={beta} {text}")
+            corrections.append(f"thermal_mass_correction(beta={beta}, profile {text})")
 
         if viscous_heating:
             v = np.abs(ds["dPdt"].data)

@@ -149,3 +149,12 @@ def test_l1_keep_counts_tree_raises(tmp_path):
     assert "t_raw" in tree["ctd"].to_dataset().data_vars
     with pytest.raises(ValueError, match="keep_counts"):
         make_l1(tree, FCTDConfig(tc=TCParams()))
+
+
+def test_l1_thermal_mass_profile_reaches_the_correction(l0_tree):
+    prof = {"p": [10.0, 200.0], "product": [0.12, 0.24]}
+    base = dict(lag=0.03, tau_t=0.05, lowpass=4.0, thermal_mass=True, beta=1 / 12)
+    with_prof = make_l1(l0_tree, FCTDConfig(tc=TCParams(**base, thermal_mass_profile=prof)))
+    const = make_l1(l0_tree, FCTDConfig(tc=TCParams(**base, alpha=0.01)))
+    assert "product=[0.12, 0.24]" in with_prof["ctd"].attrs["corrections"]
+    assert not np.array_equal(with_prof["ctd"].c.data, const["ctd"].c.data)

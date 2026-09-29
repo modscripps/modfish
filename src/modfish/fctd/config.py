@@ -61,6 +61,10 @@ class TCParams:
         derivation is for unpumped UCTD
     pr : float
         Prandtl number, Larson and Pedersen 1996 at 2 degC
+    thermal_mass_profile : dict | None
+        Pressure profile of the thermal-mass product `alpha * tau`,
+        `{"p": [...], "product": [...]}`; replaces the scalar `alpha` when
+        set. See `tc.thermal_mass_correction`.
     """
 
     lag: float = 0.0  # s, T advance (T lags C). SBE49 manual: 0.0625
@@ -71,6 +75,7 @@ class TCParams:
     beta: float = 1 / 7  # 1/s, SBE49 manual
     viscous_heating: bool = False  # derivation is for unpumped UCTD
     pr: float = 12.4  # Prandtl number, Larson and Pedersen 1996 at 2 degC
+    thermal_mass_profile: dict | None = None  # {"p": [...], "product": [...]}; replaces alpha
 
 
 @dataclasses.dataclass
