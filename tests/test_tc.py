@@ -919,3 +919,16 @@ def test_thermal_mass_profile_without_p_raises():
     ds = make_synthetic_ctd(minutes=1).drop_vars("p")
     with pytest.raises(ValueError, match="p"):
         tc.thermal_mass_correction(ds, beta=1 / 12, profile={"p": [0.0, 1.0], "product": [0.1, 0.2]})
+
+
+def test_thermal_mass_profile_scales_the_output_of_a_unit_product_recursion():
+    # every sample gets the correction a record with one constant product,
+    # the product at that sample's pressure, would get; the heat the cell
+    # carries from shallower or deeper water does not bring its own product
+    ds = make_synthetic_ctd(minutes=10)
+    beta = 1 / 12
+    prof = {"p": [0.0, 300.0], "product": [0.05, 0.40]}
+    unit = tc.thermal_mass_correction(ds, alpha=1.0 * beta, beta=beta)
+    expected = ds.c.data + np.interp(ds.p.data, prof["p"], prof["product"]) * (unit.c.data - ds.c.data)
+    out = tc.thermal_mass_correction(ds, beta=beta, profile=prof)
+    np.testing.assert_allclose(out.c.data, expected, rtol=0, atol=1e-12)

@@ -976,9 +976,11 @@ def thermal_mass_correction(
         seconds), as `{"p": [...], "product": [...]}` with `p` [dbar]
         strictly increasing and every `product` positive. The product is
         linear in pressure between knots and held at the end values
-        beyond them. When given, each sample takes
-        `alpha_i = product(p_i) * beta`, `ds` must carry `p`, and the
-        scalar `alpha` is not used. Defaults to None (constant `alpha`).
+        beyond them. When given, the recursion runs at a unit product
+        (`alpha = beta`) and its output at each sample is multiplied by
+        the product at that sample's pressure, `ds` must carry `p`, and
+        the scalar `alpha` is not used. Defaults to None (constant
+        `alpha`).
 
     Returns
     -------
@@ -1043,12 +1045,18 @@ def thermal_mass_correction(
     previous loop; the `lfilter` call itself accounts for 0.03 s of that,
     the rest being the deep copy, gap fill and gamma computation.
 
-    With a pressure profile, `alpha` varies per sample at fixed `beta`.
-    `aa` is linear in `alpha`, so `bb = 1 - 2 aa / alpha
-    = 1 - 2 (4 fn / beta) / (1 + 4 fn / beta)` does not depend on `alpha`,
-    and a per-sample `alpha` only scales the filter input. `lfilter` then
-    still applies. Where the product changes slowly against `1 / beta`,
-    the steady-state correction is `product(p) * dc/dT * dT/dt`.
+    With a pressure profile the correction is the output of the recursion
+    at a unit product, scaled per sample by `product(p)`. The recursion is
+    linear in a constant `alpha` (`aa` is linear in `alpha` and `bb` does
+    not depend on it), so every sample receives exactly the correction a
+    record with one constant product, the product at that sample's
+    pressure, would receive. This is the quantity a per-band fit of a
+    constant product measures. Scaling the recursion's input instead would
+    let the heat the cell carries for about `1 / beta` keep the product of
+    the pressure where it was picked up, which is shallower on a down cast
+    and deeper on an up cast, and would make the two directions see
+    different products wherever the product changes with depth. In steady
+    state the correction is `product(p) * dc/dT * dT/dt` either way.
 
     The record is laid out on a uniform time grid at its own sampling
     interval (`_on_uniform_grid`) before the recursion runs, so a time
@@ -1086,19 +1094,19 @@ def thermal_mass_correction(
         dTp = np.diff(T, prepend=T[0])
         dTp[0] = dTp[1]
 
-        if knots is None:
-            aa = 4 * fn * alpha / beta / (1 + 4 * fn / beta)
-            bb = 1 - 2 * aa / alpha
-        else:
-            # p carries NaN at gap slots when this runs inside `correct`'s
-            # uniform grid, so it is filled like t before the lookup
-            P, _ = _fill_gaps(ds.p.data)
-            alpha_i = np.interp(P, knots[0], knots[1]) * beta
-            aa = 4 * fn * alpha_i / beta / (1 + 4 * fn / beta)
-            bb = 1 - 2 * (4 * fn / beta) / (1 + 4 * fn / beta)
+        # with a profile the recursion runs at a unit product and its
+        # output is scaled by the product at each sample's pressure
+        a_run = alpha if knots is None else beta
+        aa = 4 * fn * a_run / beta / (1 + 4 * fn / beta)
+        bb = 1 - 2 * aa / a_run
         x = aa * gamma * dTp
         x[0] = 0.0  # the loop starts at index 1 with ctm[0] = 0
         ctm = signal.lfilter([1.0], [1.0, bb], x)
+        if knots is not None:
+            # p carries NaN at gap slots when this runs inside `correct`'s
+            # uniform grid, so it is filled like t before the lookup
+            P, _ = _fill_gaps(ds.p.data)
+            ctm = np.interp(P, knots[0], knots[1]) * ctm
 
         c_out = C + ctm
         c_out[c_mask] = np.nan
