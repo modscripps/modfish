@@ -189,7 +189,9 @@ def grid_casts(l1: xr.DataTree, params: GridParams | None = None) -> xr.Dataset:
         `chi_tot`, `eps_chi` (geometric bin means), `r`, `kmax`, `phi` (bin
         means) and `chi_flag` (bitwise or) are added over `(depth,
         cast)`. Windows flagged `FLAG_SLOW`, `FLAG_EMPTY` or `FLAG_RAIL`
-        are excluded from those bin means (a railed window's chi is set
+        are excluded from those bin means, and windows carrying a bit of
+        `params.closure_exclude_flags` also from the `chi_tot`, `eps_chi`
+        and `r` means (a railed window's chi is set
         by the saturation: on the MOTIVE products they are 0.05 % of
         windows and 93 % of those above 1e-5 K^2/s), but `chi_flag`'s bitwise-or still covers
         every window, so a bin can carry those bits without them having
@@ -263,16 +265,23 @@ def grid_casts(l1: xr.DataTree, params: GridParams | None = None) -> xr.Dataset:
         # those bits even though the flagged windows did not
         # contribute to chi/chi_tot/eps_chi/r/kmax.
         excluded = (chi_flag_all.astype(np.uint8) & (FLAG_SLOW | FLAG_EMPTY | FLAG_RAIL)) != 0
+        # params.closure_exclude_flags adds bits for the closure-derived
+        # fields only; chi itself does not pass through the closure.
+        closure_excluded = excluded | (
+            (chi_flag_all.astype(np.uint8) & np.uint8(params.closure_exclude_flags)) != 0
+        )
+        closure_fields = {"chi_tot", "eps_chi", "r"}
         for j, cid in enumerate(cast_ids):
             m = chi_cast == cid
             if not m.any():
                 continue
             d = chi_depth[m]
-            excl = excluded[m]
             for name in geo:
+                excl = (closure_excluded if name in closure_fields else excluded)[m]
                 vals = np.where(excl, np.nan, chi[name].values[m])
                 chi_grid[name][:, j] = _bin_geomean(d, vals, edges)
             for name in arith:
+                excl = (closure_excluded if name in closure_fields else excluded)[m]
                 vals = np.where(excl, np.nan, chi[name].values[m])
                 chi_grid[name][:, j] = _bin_mean(d, vals, edges)
             chi_grid["chi_flag"][:, j] = _bin_or(d, chi_flag_all[m], edges)
@@ -298,6 +307,7 @@ def grid_casts(l1: xr.DataTree, params: GridParams | None = None) -> xr.Dataset:
 
     grid.attrs = dict(ctd.attrs)
     grid.attrs["dz"] = params.dz
+    grid.attrs["closure_exclude_flags"] = int(params.closure_exclude_flags)
 
     if chi_grid:
         chi = l1["chi"].to_dataset()

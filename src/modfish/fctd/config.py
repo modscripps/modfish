@@ -90,11 +90,18 @@ class GridParams:
         m, grid lower bound. None: from data
     depth_max : float | None
         m, grid upper bound. None: from data (Matlab clamped 0-2000)
+    closure_exclude_flags : int
+        `chi_flag` bits that keep a window out of the closure-derived bin
+        means (`chi_tot`, `eps_chi`, `r`) on top of the bits excluded from
+        every chi mean. `chi`, `kmax` and `phi` are unaffected. Default 0.
+        Set 128 (`rrho_capped`) where the cap is driven by salinity-gradient
+        noise, as on MOTIVE SBE49 0664 (motive-cruise-proc drafts/44).
     """
 
     dz: float = 0.5  # m (Matlab: 0.5)
     depth_min: float | None = None  # None: from data
     depth_max: float | None = None  # None: from data (Matlab clamped 0-2000)
+    closure_exclude_flags: int = 0
 
 
 @dataclasses.dataclass

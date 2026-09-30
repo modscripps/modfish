@@ -3,6 +3,11 @@
 ## unreleased
 
 ### New Features
+-   `GridParams.closure_exclude_flags` names `chi_flag` bits that keep a
+    window out of the gridded `chi_tot`, `eps_chi` and `r` means while it
+    still contributes to `chi`. Default 0, no change. The grid attrs carry
+    the value. For windows whose `rrho_capped` bit is set by
+    salinity-gradient noise (MOTIVE SBE49 0664).
 -   `tc.downup_separation` takes a `pmax` so the down/up cost can be
     restricted to a pressure band.
 -   Added `modfish.modraw` subpackage: a binary frame scanner plus per-tag
