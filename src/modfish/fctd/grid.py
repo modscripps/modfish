@@ -13,7 +13,7 @@ rationale.
 import numpy as np
 import xarray as xr
 
-from modfish.chi.config import FLAG_EMPTY, FLAG_SLOW
+from modfish.chi.config import FLAG_EMPTY, FLAG_RAIL, FLAG_SLOW
 from modfish.fctd.config import GridParams
 
 #: `ctd` variables never gridded as data variables: positions (kept
@@ -188,8 +188,10 @@ def grid_casts(l1: xr.DataTree, params: GridParams | None = None) -> xr.Dataset:
         `ctd`, plus `dz`. When the tree carries a `chi` group, `chi`,
         `chi_tot`, `eps_chi` (geometric bin means), `r`, `kmax`, `phi` (bin
         means) and `chi_flag` (bitwise or) are added over `(depth,
-        cast)`. Windows flagged `FLAG_SLOW` or `FLAG_EMPTY` are excluded
-        from those bin means, but `chi_flag`'s bitwise-or still covers
+        cast)`. Windows flagged `FLAG_SLOW`, `FLAG_EMPTY` or `FLAG_RAIL`
+        are excluded from those bin means (a railed window's chi is set
+        by the saturation: on the MOTIVE products they are 0.05 % of
+        windows and 93 % of those above 1e-5 K^2/s), but `chi_flag`'s bitwise-or still covers
         every window, so a bin can carry those bits without them having
         contributed to the mean. Bit 2, noise-dominated, does not exclude
         a window from the means: a small signal is a valid estimate. The
@@ -255,11 +257,12 @@ def grid_casts(l1: xr.DataTree, params: GridParams | None = None) -> xr.Dataset:
         chi_depth = chi["depth"].values
         chi_flag_all = chi["chi_flag"].values
         # Controller ruling: flags 1 (FLAG_SLOW) and 4 (FLAG_EMPTY)
-        # exclude a window from the means, but chi_flag's bitwise-or
+        # exclude a window from the means, and so does 32 (FLAG_RAIL),
+        # but chi_flag's bitwise-or
         # still covers every window of the cast, so a bin can carry
         # those bits even though the flagged windows did not
         # contribute to chi/chi_tot/eps_chi/r/kmax.
-        excluded = (chi_flag_all.astype(np.uint8) & (FLAG_SLOW | FLAG_EMPTY)) != 0
+        excluded = (chi_flag_all.astype(np.uint8) & (FLAG_SLOW | FLAG_EMPTY | FLAG_RAIL)) != 0
         for j, cid in enumerate(cast_ids):
             m = chi_cast == cid
             if not m.any():
