@@ -2,6 +2,8 @@
 # coding: utf-8
 """Utilities"""
 
+import importlib.metadata
+import subprocess
 from pathlib import Path
 
 import gsw
@@ -429,3 +431,50 @@ def datetime_linspace(start_time, end_time, n_points):
     datetime_vector = start_time + time_deltas
 
     return datetime_vector
+
+
+def provenance(package_file=None) -> dict:
+    """Name the modfish that is running, for product attrs.
+
+    Parameters
+    ----------
+    package_file : path-like, optional
+        A file of the package; defaults to ``modfish/__init__.py``. Tests
+        point it elsewhere.
+
+    Returns
+    -------
+    dict
+        ``modfish_version`` from the installed metadata, and
+        ``modfish_commit`` (short hash, ``+dirty`` when tracked files
+        differ from HEAD) when `package_file` is tracked in a git
+        checkout. An install that merely sits inside some other
+        repository (a ``.venv`` under a project) is untracked there and
+        gets no commit. Untracked files do not count as dirty.
+    """
+    out = {"modfish_version": importlib.metadata.version("modfish")}
+    if package_file is None:
+        import modfish
+
+        package_file = modfish.__file__
+    package_file = Path(package_file)
+    here = package_file.parent
+
+    def git(*args):
+        return subprocess.run(["git", "-C", str(here), *args], capture_output=True,
+                              text=True, timeout=10)
+
+    try:
+        if git("ls-files", "--error-unmatch", package_file.name).returncode != 0:
+            return out
+        head = git("rev-parse", "--short", "HEAD")
+        if head.returncode != 0:
+            return out
+        dirty = git("status", "--porcelain", "--untracked-files=no")
+    except (OSError, subprocess.SubprocessError):
+        return out
+    commit = head.stdout.strip()
+    if dirty.returncode == 0 and dirty.stdout.strip():
+        commit += "+dirty"
+    out["modfish_commit"] = commit
+    return out

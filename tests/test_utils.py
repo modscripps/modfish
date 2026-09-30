@@ -109,3 +109,51 @@ def test_nsqfcn_profile_shorter_than_filter_padding_returns_nan():
         s[:30], t[:30], p[:30], p0=0, dp=10, lon=-125.0, lat=45.0
     )
     assert np.isnan(n2) and np.isnan(pout)
+
+
+def _git(*args, cwd):
+    import subprocess
+
+    subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True)
+
+
+def test_provenance_in_this_checkout_names_version_and_head():
+    import importlib.metadata
+    import subprocess
+    from pathlib import Path
+
+    prov = modfish.utils.provenance()
+    assert prov["modfish_version"] == importlib.metadata.version("modfish")
+    pkg = Path(modfish.__file__).parent
+    head = subprocess.run(["git", "-C", str(pkg), "rev-parse", "--short", "HEAD"],
+                          capture_output=True, text=True)
+    if head.returncode != 0:
+        pytest.skip("modfish not running from a git checkout")
+    assert prov["modfish_commit"].split("+")[0] == head.stdout.strip()
+
+
+def test_provenance_outside_git_has_no_commit(tmp_path):
+    (tmp_path / "__init__.py").write_text("")
+    prov = modfish.utils.provenance(tmp_path / "__init__.py")
+    assert set(prov) == {"modfish_version"}
+
+
+def test_provenance_skips_an_untracked_install_inside_another_repo(tmp_path):
+    _git("init", "-q", cwd=tmp_path)
+    _git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "x", cwd=tmp_path)
+    site = tmp_path / ".venv" / "modfish"
+    site.mkdir(parents=True)
+    (site / "__init__.py").write_text("")
+    assert "modfish_commit" not in modfish.utils.provenance(site / "__init__.py")
+
+
+def test_provenance_marks_a_dirty_tree_and_ignores_untracked_files(tmp_path):
+    _git("init", "-q", cwd=tmp_path)
+    (tmp_path / "__init__.py").write_text("a = 1\n")
+    _git("add", "__init__.py", cwd=tmp_path)
+    _git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "x", cwd=tmp_path)
+    (tmp_path / "notes.txt").write_text("untracked")
+    clean = modfish.utils.provenance(tmp_path / "__init__.py")["modfish_commit"]
+    assert "+" not in clean and len(clean) >= 7
+    (tmp_path / "__init__.py").write_text("a = 2\n")
+    assert modfish.utils.provenance(tmp_path / "__init__.py")["modfish_commit"] == clean + "+dirty"

@@ -302,5 +302,7 @@ def grid_casts(l1: xr.DataTree, params: GridParams | None = None) -> xr.Dataset:
             grid[name].attrs = dict(chi[name].attrs)
         for key in ("gain", "gain_source", "antialias", "modfish_version"):
             grid.attrs[f"chi_{key}"] = chi.attrs[key]
+        if "modfish_commit" in chi.attrs:
+            grid.attrs["chi_modfish_commit"] = chi.attrs["modfish_commit"]
 
     return grid
