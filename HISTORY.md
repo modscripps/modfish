@@ -75,6 +75,16 @@
     can now come out negative.
 
 ### Bug fixes
+-   `concat_l0` removes two acquisition-restart defects from `ctd`
+    (#41). Records at a file's start that are stamped later than records
+    following them (0.2 to 2.3 s late on MOTIVE, two to four records) are
+    dropped per file, and a first sample after a gap longer than 0.5 s is
+    dropped when its pressure departs from the extrapolation of the next
+    two samples by more than 5 dbar (stale readings 30 to 50 dbar off,
+    with `t` and `c` equally stale). The counts are stamped as
+    `n_misstamped` and `n_stale_after_gap` on the `ctd` attrs. On the 23
+    MOTIVE products this removes 16 samples from five of them and leaves
+    the other 18 unchanged.
 -   `tc.correct`, `tc.response_correction` and `tc.thermal_mass_correction`
     lay the record on a uniform time grid before running, so a time gap in
     a concatenated record no longer feeds a step into the low-pass, the
