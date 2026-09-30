@@ -5,7 +5,6 @@ import logging
 import numpy as np
 import pandas as pd
 import xarray as xr
-from scipy.ndimage import uniform_filter1d
 
 from modfish.chi.batchelor import FractionTable
 from modfish.chi.closure import closure, stratification
@@ -13,7 +12,7 @@ from modfish.chi.config import FLAG_MEANINGS, FLAG_NOENV, ChiParams
 from modfish.chi.load import load_c1
 from modfish.chi.noise import resolve
 from modfish.chi.spectra import dtdc, run_range, window_slices
-from modfish.utils import provenance, sampling_interval
+from modfish.utils import gap_aware_rate, provenance
 
 logger = logging.getLogger(__name__)
 
@@ -188,10 +187,8 @@ def chi_dataset(ctd: xr.Dataset, casts: xr.Dataset, c1, ranges: pd.DataFrame,
     if not params.enabled or params.gain is None:
         raise ValueError("add_chi needs ChiParams with enabled=True and a gain")
     floor = resolve(params.noise)
-    fs16 = 1.0 / sampling_interval(ctd["time"].values)
     time_ns = ctd["time"].values.astype("datetime64[ns]").astype("int64")
-    spd16 = np.gradient(ctd["depth"].values.astype(float)) * fs16
-    spd16 = np.abs(uniform_filter1d(spd16, max(int(round(params.spd_smooth * fs16)), 1), mode="nearest"))
+    spd16 = np.abs(gap_aware_rate(ctd["depth"].values, ctd["time"].values, params.spd_smooth))
 
     # _record_floor pools across ranges, so size the stride from the
     # deployment's total window count. Targeting about 5000 retained

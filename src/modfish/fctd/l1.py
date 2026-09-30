@@ -22,11 +22,10 @@ import logging
 import gsw
 import numpy as np
 import xarray as xr
-from scipy.ndimage import uniform_filter1d
 
 from modfish import tc
 from modfish.fctd.casts import casts_to_dataset, find_casts, label_casts
-from modfish.utils import provenance, sampling_interval
+from modfish.utils import gap_aware_rate, provenance
 from modfish.fctd.config import FCTDConfig
 
 logger = logging.getLogger(__name__)
@@ -175,7 +174,8 @@ def _add_depth(ctd: xr.Dataset) -> xr.Dataset:
 
 
 def _add_dpdt(ctd: xr.Dataset, config: FCTDConfig) -> xr.Dataset:
-    """Add smoothed pressure rate of change `dPdt` (dbar/s).
+    """Add smoothed pressure rate of change `dPdt` (dbar/s), per gap-free run
+    (`modfish.utils.gap_aware_rate`).
 
     Parameters
     ----------
@@ -189,10 +189,7 @@ def _add_dpdt(ctd: xr.Dataset, config: FCTDConfig) -> xr.Dataset:
     xr.Dataset
         `ctd` with `dPdt` added.
     """
-    fs = 1.0 / sampling_interval(ctd["time"].values)
-    dpdt = np.gradient(ctd["p"].values) * fs
-    window = max(round(config.dpdt_smooth * fs), 1)
-    dpdt = uniform_filter1d(dpdt, window, mode="nearest")
+    dpdt = gap_aware_rate(ctd["p"].values, ctd["time"].values, config.dpdt_smooth)
     ctd = ctd.assign(dPdt=("time", dpdt))
     ctd["dPdt"].attrs = dict(long_name="pressure rate of change", units="dbar/s")
     return ctd

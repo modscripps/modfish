@@ -169,3 +169,12 @@ def test_l1_and_grid_carry_modfish_provenance(l0_tree):
     for key, value in prov.items():
         assert l1["ctd"].attrs[key] == value
         assert grid_casts(l1).attrs[key] == value
+
+
+def test_l1_dpdt_has_no_spike_across_a_time_gap(tmp_path):
+    from modfish.fctd.concat import concat_l0
+
+    files = write_l0_files(tmp_path / "gap", n_files=2, minutes=6.0, p_fn=two_cast_p, gap_s=240.0)
+    l1 = make_l1(concat_l0(files, groups=("ctd", "gps")), FCTDConfig())
+    dpdt = l1["ctd"]["dPdt"].values
+    assert np.nanmax(np.abs(dpdt)) < 10.0
