@@ -180,3 +180,64 @@ def test_grid_means_phi_and_bit2_does_not_exclude(l1_tree):
     assert "phi" in g.data_vars and g["phi"].dims == ("depth", "cast")
     assert g["phi"].values[bin_idx, j] == pytest.approx(0.5)
     assert int(g["chi_flag"].values[bin_idx, j]) & FLAG_NOISE
+
+
+def _tree_with_two_windows(l1_tree, flags, chi_tot):
+    """l1_tree plus a chi group of two windows in one bin of the first cast."""
+    ctd = l1_tree["ctd"].to_dataset()
+    casts_ds = l1_tree["casts"].to_dataset()
+    cid = int(casts_ds["cast"].values[0])
+    depth_val = float(np.nanmean(ctd["depth"].values))
+    chi_ds = xr.Dataset(
+        {
+            "depth": ("time", np.array([depth_val, depth_val])),
+            "cast": ("time", np.array([cid, cid], dtype=int)),
+            "chi": ("time", np.array([1e-9, 4e-9])),
+            "chi_tot": ("time", np.asarray(chi_tot, dtype=float)),
+            "eps_chi": ("time", np.asarray(chi_tot, dtype=float) * 10),
+            "r": ("time", np.array([0.2, 0.6])),
+            "chi_flag": ("time", np.asarray(flags, dtype=np.uint8)),
+        },
+        coords={"time": np.array(["2020-01-01T00:00:00", "2020-01-01T00:00:01"],
+                                 dtype="datetime64[ns]")},
+    )
+    chi_ds.attrs = dict(gain=50.0, gain_source="test", antialias="som_sinc4",
+                        modfish_version="0.0.0")
+    groups = {f"/{name}": child.to_dataset() for name, child in l1_tree.children.items()}
+    groups["/chi"] = chi_ds
+    tree = xr.DataTree.from_dict(groups)
+    tree.attrs = dict(l1_tree.attrs)
+    j = list(casts_ds["cast"].values).index(cid)
+    return tree, j, depth_val
+
+
+def test_grid_closure_exclude_flags_drop_closure_fields_only(l1_tree):
+    """closure_exclude_flags keeps a flagged window out of the chi_tot,
+    eps_chi and r means but not out of the chi mean (MOTIVE 0664 windows
+    whose rrho cap is set by salinity-gradient noise)."""
+    from modfish.chi.config import FLAG_RRHO
+
+    tree, j, depth_val = _tree_with_two_windows(l1_tree, [FLAG_RRHO, 0], [5e-8, 2e-9])
+    g = grid_casts(tree, GridParams(closure_exclude_flags=FLAG_RRHO))
+    b = int(np.nanargmin(np.abs(g["depth"].values - depth_val)))
+    assert g["chi_tot"].values[b, j] == pytest.approx(2e-9)
+    assert g["eps_chi"].values[b, j] == pytest.approx(2e-8)
+    assert g["r"].values[b, j] == pytest.approx(0.6)
+    assert g["chi"].values[b, j] == pytest.approx(2e-9)  # geometric mean of both
+    assert int(g["chi_flag"].values[b, j]) & FLAG_RRHO
+    assert g.attrs["closure_exclude_flags"] == FLAG_RRHO
+
+
+def test_grid_closure_exclude_flags_default_keeps_capped_windows(l1_tree):
+    from modfish.chi.config import FLAG_RRHO
+
+    tree, j, depth_val = _tree_with_two_windows(l1_tree, [FLAG_RRHO, 0], [5e-8, 2e-9])
+    g = grid_casts(tree)
+    b = int(np.nanargmin(np.abs(g["depth"].values - depth_val)))
+    assert g["chi_tot"].values[b, j] == pytest.approx(1e-8)
+    assert g.attrs["closure_exclude_flags"] == 0
+
+
+def test_config_reads_closure_exclude_flags():
+    cfg = FCTDConfig.from_dict({"grid": {"closure_exclude_flags": 128}})
+    assert cfg.grid.closure_exclude_flags == 128
