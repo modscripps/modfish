@@ -60,8 +60,10 @@ def test_bin_geomean_and_or():
 
 def test_grid_bins_chi_group(l1_tree, tmp_path):
     files = write_l0_files(tmp_path / "chi", n_files=3, minutes=12.0, p_fn=two_cast_p)
+    # synth_l0's c1 is N(0, 1) V, so every window crosses the default
+    # rails (0.001, 2.499 V) and the gridder would exclude them all.
     l1 = add_chi(make_l1(concat_l0(files, groups=("ctd", "gps")), FCTDConfig()), files,
-                 ChiParams(enabled=True, gain=50.0))
+                 ChiParams(enabled=True, gain=50.0, rail_lo=-10.0, rail_hi=10.0))
     g = grid_casts(l1)
     for name in ("chi", "chi_tot", "eps_chi", "r", "kmax", "chi_flag"):
         assert g[name].dims == ("depth", "cast")
@@ -108,6 +110,40 @@ def test_grid_chi_flag_masks_kmax_mean(l1_tree):
     bin_idx = int(np.nanargmin(np.abs(g["depth"].values - depth_val)))
     assert g["kmax"].values[bin_idx, j] == pytest.approx(50.0)
     assert int(g["chi_flag"].values[bin_idx, j]) & FLAG_EMPTY
+
+
+def test_grid_excludes_railed_windows_from_chi_means(l1_tree):
+    """A window with a c1 sample at the ADC rail stays out of the bin means
+    (its chi is set by the saturation), and chi_flag still carries bit 32."""
+    from modfish.chi.config import FLAG_RAIL
+
+    ctd = l1_tree["ctd"].to_dataset()
+    casts_ds = l1_tree["casts"].to_dataset()
+    cid = int(casts_ds["cast"].values[0])
+    depth_val = float(np.nanmean(ctd["depth"].values))
+
+    chi_ds = xr.Dataset(
+        {
+            "depth": ("time", np.array([depth_val, depth_val])),
+            "cast": ("time", np.array([cid, cid], dtype=int)),
+            "chi": ("time", np.array([1e-2, 2e-9])),
+            "chi_flag": ("time", np.array([FLAG_RAIL, 0], dtype=np.uint8)),
+        },
+        coords={"time": np.array(["2020-01-01T00:00:00", "2020-01-01T00:00:01"],
+                                 dtype="datetime64[ns]")},
+    )
+    chi_ds.attrs = dict(gain=50.0, gain_source="test", antialias="som_sinc4",
+                        modfish_version="0.0.0")
+    groups = {f"/{name}": child.to_dataset() for name, child in l1_tree.children.items()}
+    groups["/chi"] = chi_ds
+    tree = xr.DataTree.from_dict(groups)
+    tree.attrs = dict(l1_tree.attrs)
+
+    g = grid_casts(tree)
+    j = list(casts_ds["cast"].values).index(cid)
+    bin_idx = int(np.nanargmin(np.abs(g["depth"].values - depth_val)))
+    assert g["chi"].values[bin_idx, j] == pytest.approx(2e-9)
+    assert int(g["chi_flag"].values[bin_idx, j]) & FLAG_RAIL
 
 
 def test_grid_means_phi_and_bit2_does_not_exclude(l1_tree):
