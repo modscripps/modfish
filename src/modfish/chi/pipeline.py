@@ -1,6 +1,5 @@
 """Assemble the `/chi` group of an L1 tree from the L0 `efe/c1` files."""
 
-import importlib.metadata
 import logging
 
 import numpy as np
@@ -14,7 +13,7 @@ from modfish.chi.config import FLAG_MEANINGS, FLAG_NOENV, ChiParams
 from modfish.chi.load import load_c1
 from modfish.chi.noise import resolve
 from modfish.chi.spectra import dtdc, run_range, window_slices
-from modfish.utils import sampling_interval
+from modfish.utils import provenance, sampling_interval
 
 logger = logging.getLogger(__name__)
 
@@ -173,7 +172,8 @@ def chi_dataset(ctd: xr.Dataset, casts: xr.Dataset, c1, ranges: pd.DataFrame,
         `params.closure` is True, `chi_tot`, `eps_chi`, `r`, `n2`, `Tz`,
         `Sz`, `Rrho`. Group attrs carry every `ChiParams` field,
         `flag_meanings`, `range_fs`, `n_ranges`, `n_windows` and
-        `modfish_version`, and, when `params.noise` resolves to a floor,
+        `modfish.utils.provenance` (`modfish_version`, `modfish_commit`
+        when running from a git checkout), and, when `params.noise` resolves to a floor,
         that floor's provenance (`noise_source`, `noise_records`,
         `noise_measured`, `noise_nu`) and the record's own floor estimate
         (`record_floor_f`, `record_floor_n`, `record_flatness_20hz`) for
@@ -268,7 +268,7 @@ def chi_dataset(ctd: xr.Dataset, casts: xr.Dataset, c1, ranges: pd.DataFrame,
     attrs["range_fs"] = [float(x) for x in ranges.fs.values]
     attrs["n_ranges"] = int(len(ranges))
     attrs["n_windows"] = int(ds.sizes["time"])
-    attrs["modfish_version"] = importlib.metadata.version("modfish")
+    attrs.update(provenance())
     attrs["enabled"] = int(params.enabled)
     attrs["closure"] = int(params.closure)
     if floor is not None:

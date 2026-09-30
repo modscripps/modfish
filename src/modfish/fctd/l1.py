@@ -26,7 +26,7 @@ from scipy.ndimage import uniform_filter1d
 
 from modfish import tc
 from modfish.fctd.casts import casts_to_dataset, find_casts, label_casts
-from modfish.utils import sampling_interval
+from modfish.utils import provenance, sampling_interval
 from modfish.fctd.config import FCTDConfig
 
 logger = logging.getLogger(__name__)
@@ -297,7 +297,10 @@ def make_l1(tree: xr.DataTree, config: FCTDConfig | None = None) -> xr.DataTree:
         `cast`) and `casts` (per-cast table), plus `efe`, `ecop`, `gps`,
         `alti` carried through when present in `tree` (`efe`/`ecop`
         cast-tagged, `gps`/`alti` unchanged). Root attrs and `ctd` attrs
-        carry the input tree's concat provenance (`files`, `n_files`).
+        carry the input tree's concat provenance (`files`, `n_files`), and
+        `ctd` attrs the running modfish (`modfish.utils.provenance`:
+        `modfish_version`, `modfish_commit` from a git checkout), which
+        `grid_casts` carries into the grid with the rest of the `ctd` attrs.
 
     Raises
     ------
@@ -369,6 +372,7 @@ def make_l1(tree: xr.DataTree, config: FCTDConfig | None = None) -> xr.DataTree:
 
     ctd = _apply_tc(ctd, config)
     ctd = _add_derived(ctd)
+    ctd.attrs.update(provenance())
 
     groups = {"ctd": ctd, "casts": casts_ds}
     if efe is not None:

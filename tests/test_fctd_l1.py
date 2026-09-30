@@ -158,3 +158,14 @@ def test_l1_thermal_mass_profile_reaches_the_correction(l0_tree):
     const = make_l1(l0_tree, FCTDConfig(tc=TCParams(**base, alpha=0.01)))
     assert "product=[0.12, 0.24]" in with_prof["ctd"].attrs["corrections"]
     assert not np.array_equal(with_prof["ctd"].c.data, const["ctd"].c.data)
+
+
+def test_l1_and_grid_carry_modfish_provenance(l0_tree):
+    from modfish.fctd.grid import grid_casts
+    from modfish.utils import provenance
+
+    l1 = make_l1(l0_tree, FCTDConfig())
+    prov = provenance()
+    for key, value in prov.items():
+        assert l1["ctd"].attrs[key] == value
+        assert grid_casts(l1).attrs[key] == value

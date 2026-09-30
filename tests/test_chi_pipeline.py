@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
+import modfish.utils
 from modfish.chi import add_chi
 from modfish.chi.config import FLAG_MEANINGS, FLAG_N2, FLAG_NOENV, ChiParams
 from modfish.chi.load import load_c1
@@ -37,6 +38,7 @@ def test_add_chi_builds_group(l1_and_files):
     assert chi.attrs["antialias"] == "som_sinc4"
     assert chi.attrs["flag_meanings"] == FLAG_MEANINGS
     assert "modfish_version" in chi.attrs and chi.attrs["n_ranges"] >= 1
+    assert chi.attrs.get("modfish_commit") == modfish.utils.provenance().get("modfish_commit")
     assert set(np.unique(chi.cast.values)) - {0} == set(out["casts"].to_dataset().cast.values)
     efe0 = xr.open_dataset(files[0], group="efe")
     expected_t0 = efe0["time"].values[0] + np.timedelta64(int(params.window / 2 * 1e9), "ns")
