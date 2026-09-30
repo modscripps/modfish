@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 import scipy
 from munch import munchify
+from scipy.ndimage import uniform_filter1d
 from scipy.signal import filtfilt
 
 
@@ -177,6 +178,48 @@ def sampling_interval(time) -> float:
     if not regular.any():
         raise ValueError("no regular time step found; is the time axis monotonic?")
     return float(dt[regular].mean())
+
+
+def gap_aware_rate(x, time, smooth: float, gap_factor: float = 1.5) -> np.ndarray:
+    """Smoothed rate of change of `x` per second, computed per gap-free run.
+
+    The record is split wherever a time step reaches `gap_factor` times the
+    median step (the threshold `modfish.tc` uses for gaps). Inside each run
+    the rate is `np.gradient(x) * fs` over the sample index, `fs` from
+    `sampling_interval` of the whole record, followed by a boxcar of
+    `smooth` seconds with `mode="nearest"`, so a record without gaps gives
+    exactly the index gradient and boxcar it always did. A step across a gap
+    never enters a difference or a boxcar (modscripps/modfish#35: an index
+    gradient across a gap put spikes up to 1018 dbar/s into `dPdt`).
+
+    Parameters
+    ----------
+    x : array_like
+        Samples, e.g. pressure or depth.
+    time : array_like
+        datetime64 timestamps of `x`, increasing.
+    smooth : float
+        Boxcar length, s.
+    gap_factor : float, optional
+        A step of at least this many median steps starts a new run.
+
+    Returns
+    -------
+    numpy.ndarray
+        Rate of change of `x` per second, NaN on runs of a single sample.
+    """
+    x = np.asarray(x, dtype=float)
+    time = np.asarray(time)
+    fs = 1.0 / sampling_interval(time)
+    dt = np.diff(time) / np.timedelta64(1, "s")
+    breaks = np.flatnonzero(dt >= gap_factor * np.median(dt)) + 1
+    window = max(int(round(smooth * fs)), 1)
+    out = np.full(x.size, np.nan)
+    for a, b in zip(np.r_[0, breaks], np.r_[breaks, x.size]):
+        if b - a < 2:
+            continue
+        out[a:b] = uniform_filter1d(np.gradient(x[a:b]) * fs, window, mode="nearest")
+    return out
 
 
 def mattime_to_datetime64(dnum):

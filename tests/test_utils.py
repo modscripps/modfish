@@ -157,3 +157,31 @@ def test_provenance_marks_a_dirty_tree_and_ignores_untracked_files(tmp_path):
     assert "+" not in clean and len(clean) >= 7
     (tmp_path / "__init__.py").write_text("a = 2\n")
     assert modfish.utils.provenance(tmp_path / "__init__.py")["modfish_commit"] == clean + "+dirty"
+
+
+def _time16(n, start="2025-12-06"):
+    return np.datetime64(start) + np.round(np.arange(n) / 16 * 1000).astype("timedelta64[ms]")
+
+
+def test_gap_aware_rate_matches_index_gradient_without_gaps():
+    from scipy.ndimage import uniform_filter1d
+
+    t = _time16(800)
+    x = 3.0 * np.arange(800) / 16 + np.sin(np.arange(800) / 30)
+    fs = 1 / modfish.utils.sampling_interval(t)
+    old = uniform_filter1d(np.gradient(x) * fs, 16, mode="nearest")
+    np.testing.assert_array_equal(modfish.utils.gap_aware_rate(x, t, 1.0), old)
+
+
+def test_gap_aware_rate_has_no_spike_across_a_gap():
+    t = np.concatenate([_time16(400), _time16(400, "2025-12-06T00:05:00")])
+    x = np.concatenate([3.0 * np.arange(400) / 16, 700 + 3.0 * np.arange(400) / 16])
+    rate = modfish.utils.gap_aware_rate(x, t, 1.0)
+    np.testing.assert_allclose(rate, 3.0, rtol=1e-4)  # ms-quantized stamps
+
+
+def test_gap_aware_rate_is_nan_on_a_single_sample_run():
+    t = np.concatenate([_time16(100), _time16(1, "2025-12-06T00:01:00"), _time16(100, "2025-12-06T00:02:00")])
+    x = np.arange(201, dtype=float)
+    rate = modfish.utils.gap_aware_rate(x, t, 1.0)
+    assert np.isnan(rate[100]) and np.isfinite(np.delete(rate, 100)).all()

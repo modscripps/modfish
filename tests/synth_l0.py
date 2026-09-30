@@ -173,7 +173,7 @@ def make_l0_tree(
 
 
 def write_l0_files(
-    outdir, n_files: int = 3, minutes: float = 10.0, p_fn=None, **kw
+    outdir, n_files: int = 3, minutes: float = 10.0, p_fn=None, gap_s: float = 0.0, **kw
 ) -> list[Path]:
     """Write a sequence of synthetic per-file L0 netCDF files.
 
@@ -193,6 +193,10 @@ def write_l0_files(
     p_fn : callable or None
         `p_fn(seconds) -> pressure`, `seconds` counted from the start of
         the first file. Default: constant 5 dbar.
+    gap_s : float, optional
+        Acquisition gap, s, inserted before every file after the first.
+        Time and `p_fn` both advance across it, so pressure jumps the way
+        it does over a real gap. Default 0 (contiguous files).
     **kw
         Passed through to `make_l0_tree` (`fs`, `with_efe`, `with_gps`,
         `seed`).
@@ -213,7 +217,7 @@ def write_l0_files(
     paths = []
     for i in range(n_files):
         k0 = i * step
-        offset = k0 / fs
+        offset = k0 / fs + i * gap_s
         file_t0 = t0 + pd.to_timedelta(offset, unit="s")
 
         if p_fn is not None:
