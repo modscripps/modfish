@@ -294,3 +294,26 @@ def test_run_range_phi_matches_the_chi_noise_ratio():
         assert value_noise == pytest.approx(value * phi / (1 - phi))
         checked += 1
     assert checked > 0, "no window produced a finite, non-unity phi to check"
+
+
+@pytest.mark.parametrize("fs,window,nsec", [(325.52, 2.0, 0.5), (320.0, 2.0, 0.5),
+                                            (325.52, 2.0, 0.25), (325.52, 4.0, 0.5)])
+def test_welch_dof_matches_white_noise(fs, window, nsec):
+    """`welch_dof` against `2 mean^2 / var` of white-noise Welch PSDs, the
+    measurement behind the shipped floor's nu = 11.04 at 325.52 Hz."""
+    from modfish.chi.spectra import welch_dof, window_spectrum
+
+    rng = np.random.default_rng(1)
+    nw = int(round(window * fs))
+    P = np.array([window_spectrum(rng.standard_normal(nw), fs, nsec)[1]
+                  for _ in range(3000)])[:, 1:-1]
+    nu_emp = np.median(2 * P.mean(axis=0) ** 2 / P.var(axis=0))
+    assert welch_dof(fs, window, nsec) == pytest.approx(nu_emp, rel=0.05)
+
+
+def test_welch_dof_reproduces_the_shipped_floor_nu():
+    from modfish.chi.noise import NoiseFloor
+    from modfish.chi.spectra import welch_dof
+
+    assert welch_dof(325.52, 2.0, 0.5) == pytest.approx(
+        NoiseFloor.from_builtin("fctd_2026").nu, abs=0.05)

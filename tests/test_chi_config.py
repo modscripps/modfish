@@ -65,3 +65,11 @@ def test_fctd_config_carries_chi_section():
     with pytest.raises(ValueError, match="Unknown keys in chi"):
         FCTDConfig.from_dict({"chi": {"gian": 50.0}})
     assert "chi" in {f.name for f in dataclasses.fields(FCTDConfig)}
+
+
+@pytest.mark.parametrize("kw", [dict(step=0.0), dict(step=-0.25), dict(window=0.0),
+                                dict(nsec=0.0), dict(nsec=3.0), dict(kmin=12.5),
+                                dict(kmin=20.0), dict(min_spd=0.0)])
+def test_window_and_band_validated(kw):
+    with pytest.raises(ValueError):
+        ChiParams(**kw)

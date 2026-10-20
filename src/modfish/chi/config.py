@@ -8,7 +8,7 @@ FLAG_SLOW = 1  # fall rate below min_spd
 FLAG_NOISE = 2  # noise-dominated: phi above phi_max
 FLAG_EMPTY = 4  # fewer than min_bins wavenumber bins survived
 FLAG_RCLIP = 8  # closure solve at an edge of the eps table (r held at the floor value below it, NaN above it)
-FLAG_N2 = 16  # n2 finite and not positive, closure undefined; a NaN n2 gets bit 64 instead
+FLAG_N2 = 16  # n2 finite and not positive under a finite chi, closure undefined; a NaN n2 gets bit 64 instead
 FLAG_RAIL = 32  # a c1 sample in the window sat at the ADC rail
 FLAG_NOENV = 64  # no environment: window center outside the ctd record, a NaN c1 sample in the window, or a NaN closure input (n2, alpha, Rrho) under a finite chi
 FLAG_RRHO = 128  # (1 + 1/Rrho^2) capped at rrho_factor_max
@@ -119,3 +119,10 @@ class ChiParams:
             )
         if self.enabled and self.gain is None:
             raise ValueError("chi.enabled is true but chi.gain is not set")
+        for name in ("window", "step", "nsec", "min_spd"):
+            if not getattr(self, name) > 0:
+                raise ValueError(f"chi.{name} must be positive, got {getattr(self, name)!r}")
+        if self.nsec > self.window:
+            raise ValueError(f"chi.nsec ({self.nsec}) must not exceed chi.window ({self.window})")
+        if not self.kmin < self.kmax_cap:
+            raise ValueError(f"chi.kmin ({self.kmin}) must be below chi.kmax_cap ({self.kmax_cap})")

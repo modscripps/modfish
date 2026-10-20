@@ -141,3 +141,29 @@ def test_fit_gain_casts_skips_too_few_bins_cast(caplog):
                              band=(0.05, 0.06))
     assert df.empty
     assert any("cast 1" in r.getMessage() for r in caplog.records)
+
+
+def test_fit_gain_casts_rate_robust_to_quantized_timestamps():
+    """16 Hz stamps quantized to 1 ms alternate 62 and 63 ms steps. A rate
+    from the median step reads 16.13 Hz (62 ms) and biases the gain about
+    4 % high; the true rate must come from the span."""
+    import pandas as pd
+    import xarray as xr
+    from modfish.chi.fit import fit_gain_casts
+
+    seconds = 300.0
+    c_ctd, volts, spd = _pair(gain_true=40.0, seconds=seconds)
+    t0 = np.datetime64("2025-12-06T00:00:00")
+    # floor to whole ms: 0, 62, 125, 187, 250, ... more 62 ms steps than 63
+    offs_ms = np.floor(np.arange(c_ctd.size) / FS16 * 1e3).astype("int64")
+    t16 = t0 + offs_ms.astype("timedelta64[ms]").astype("timedelta64[ns]")
+    assert np.median(np.diff(offs_ms)) == 62
+    depth = spd * np.arange(c_ctd.size) / FS16
+    ctd = xr.Dataset(dict(c=("time", c_ctd), depth=("time", depth)), coords=dict(time=t16))
+    casts = xr.Dataset(
+        dict(start_time=("cast", [t16[16 * 30]]), end_time=("cast", [t16[16 * 270]]),
+             direction=("cast", np.array(["down"], dtype=object))),
+        coords=dict(cast=[1]))
+    ranges = pd.DataFrame([dict(i0=0, n=volts.size, start=t0, fs=FS1)])
+    df = fit_gain_casts(ctd, volts.astype(np.float32), ranges, casts, ChiParams())
+    assert df.gain.iloc[0] == pytest.approx(40.0, rel=0.015)

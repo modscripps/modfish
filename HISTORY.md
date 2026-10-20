@@ -3,6 +3,11 @@
 ## unreleased
 
 ### New Features
+-   The `chi` group carries a per-window `direction` ("down", "up", or
+    "none" outside every cast). `spd` is a speed magnitude, so upcast
+    windows were only distinguishable by joining against `casts`.
+-   `ChiParams` rejects a non-positive `window`, `step`, `nsec` or
+    `min_spd`, an `nsec` longer than `window`, and `kmin >= kmax_cap`.
 -   `GridParams.closure_exclude_flags` names `chi_flag` bits that keep a
     window out of the gridded `chi_tot`, `eps_chi` and `r` means while it
     still contributes to `chi`. Default 0, no change. The grid attrs carry
@@ -80,6 +85,19 @@
     can now come out negative.
 
 ### Bug fixes
+-   `chi.fit.fit_gain_casts` takes the CTD sampling rate from the record
+    span (`utils.sampling_interval`). The median step of 1 ms-quantized
+    16 Hz stamps reads 62 ms, which biased the fitted gain 2 % high on a
+    synthetic record and chi about twice that.
+-   The `chi` record floor estimate (`record_floor_n`) inverts the
+    chi-square quantile at the degrees of freedom of the current Welch
+    setup (new `chi.spectra.welch_dof`) instead of the shipped floor's
+    11.04. With `nsec = 0.25` the old value read the floor about 1.4x
+    high. Default settings at 325.52 Hz give 11.03, so default runs are
+    unchanged.
+-   `FLAG_N2` is set only on windows with a finite `chi`, like
+    `FLAG_RRHO`. Slow, empty-band and no-environment windows in inverted
+    stratification no longer carry bit 16.
 -   `concat_l0` removes two acquisition-restart defects from `ctd`
     (#41). Records at a file's start that are stamped later than records
     following them (0.2 to 2.3 s late on MOTIVE, two to four records) are

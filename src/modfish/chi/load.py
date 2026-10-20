@@ -78,7 +78,7 @@ def load_c1(files, gap=0.01):
         cuts = np.flatnonzero(np.diff(t) > gap_ns) + 1
         seg0 = np.concatenate([[0], cuts])
         seg1 = np.concatenate([cuts, [t.size]])
-        for a, b in zip(seg0, seg1):
+        for a, b in zip(seg0, seg1, strict=True):
             n = int(b - a)
             if spans and a == 0 and t[0] - spans[-1]["last"] <= gap_ns:
                 spans[-1]["n"] += n

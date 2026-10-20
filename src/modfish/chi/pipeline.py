@@ -7,35 +7,14 @@ import pandas as pd
 import xarray as xr
 
 from modfish.chi.batchelor import FractionTable
-from modfish.chi.closure import closure, stratification
+from modfish.chi.closure import _interp_at, closure, stratification
 from modfish.chi.config import FLAG_MEANINGS, FLAG_NOENV, ChiParams
 from modfish.chi.load import load_c1
 from modfish.chi.noise import resolve
-from modfish.chi.spectra import dtdc, run_range, window_slices
+from modfish.chi.spectra import dtdc, run_range, welch_dof, window_slices
 from modfish.utils import gap_aware_rate, provenance
 
 logger = logging.getLogger(__name__)
-
-
-def _interp_at(centers_ns, time_ns, values):
-    """Linear interpolation of one CTD variable onto window centers.
-
-    Parameters
-    ----------
-    centers_ns : numpy.ndarray of int64
-        Window center times, nanoseconds since the epoch.
-    time_ns : numpy.ndarray of int64
-        CTD timestamps, nanoseconds since the epoch, increasing.
-    values : array_like
-        CTD variable, same length as `time_ns`.
-
-    Returns
-    -------
-    numpy.ndarray of float
-        `values` linearly interpolated at `centers_ns`. NaN outside the
-        span of `time_ns`.
-    """
-    return np.interp(centers_ns, time_ns, np.asarray(values, dtype=float), left=np.nan, right=np.nan)
 
 
 def _fraction_table(params: ChiParams) -> FractionTable:
@@ -66,7 +45,7 @@ def _fraction_table(params: ChiParams) -> FractionTable:
 
 
 def _label_casts(centers, casts: xr.Dataset):
-    """Cast id of each window center, 0 outside every detected cast.
+    """Cast id and direction of each window center.
 
     Parameters
     ----------
@@ -74,32 +53,63 @@ def _label_casts(centers, casts: xr.Dataset):
         datetime64, window center times.
     casts : xarray.Dataset
         `casts` group with dim `cast` and variables `start_time`,
-        `end_time`.
+        `end_time`, `direction`.
 
     Returns
     -------
-    numpy.ndarray of int
+    label : numpy.ndarray of int
         Cast id at each center, 0 where the center falls outside every
         cast interval.
+    direction : numpy.ndarray of object
+        "down" or "up" from the cast's `direction`, "none" outside every
+        cast.
     """
     label = np.zeros(centers.size, dtype=int)
-    for cid, t0, t1 in zip(casts["cast"].values, casts["start_time"].values, casts["end_time"].values):
-        label[(centers >= t0) & (centers <= t1)] = int(cid)
-    return label
+    direction = np.full(centers.size, "none", dtype=object)
+    for cid, t0, t1, d in zip(casts["cast"].values, casts["start_time"].values,
+                              casts["end_time"].values, casts["direction"].values, strict=True):
+        inside = (centers >= t0) & (centers <= t1)
+        label[inside] = int(cid)
+        direction[inside] = str(d)
+    return label, direction
 
 
-def _record_floor(diag, nu, deep_frac=80, qs=(0.02, 0.05, 0.30),
+def _record_floor(diag, deep_frac=80, qs=(0.02, 0.05, 0.30),
                   ref_f=(4.0, 10.0, 20.0, 37.5)):
     """The record's own floor estimate and its lower-tail flatness.
 
     Pools the subsampled raw PSDs kept by `run_range`, takes the deepest
     `100 - deep_frac` percent of them and inverts the chi-square quantile,
-    `N_hat(q) = P_q / Q(q)`. The result is an upper bound on this record's
-    floor. Flatness is `N_hat(0.30) / N_hat(0.02)` at 20 Hz; near 1 means a
-    stationary additive level dominates the tail.
+    `N_hat(q) = P_q / Q(q)`, with `Q` the quantile of `chi^2_nu / nu` at
+    the degrees of freedom of the pooled spectra. The result is an upper
+    bound on this record's floor. Flatness is `N_hat(0.30) / N_hat(0.02)`
+    at 20 Hz; near 1 means a stationary additive level dominates the tail.
 
-    Returns `(ref_f, N_hat at q=0.05, flatness)`, all NaN when too few
-    spectra were kept.
+    Parameters
+    ----------
+    diag : list of tuple
+        One `(Pf, depth, f, nu)` entry per range: captured raw PSDs (one
+        row per window), the window depths, the shared frequency axis and
+        the Welch degrees of freedom (`welch_dof`) of those spectra.
+    deep_frac : float, optional
+        Depth percentile above which windows are pooled.
+    qs : tuple of float, optional
+        Probabilities of the lower-tail quantiles. The flatness uses the
+        first and last, the returned estimate the second.
+    ref_f : tuple of float, optional
+        Hz, frequencies at which the estimate is reported.
+
+    Returns
+    -------
+    ref_f : numpy.ndarray
+        Hz, the reporting frequencies.
+    n_hat : numpy.ndarray
+        V^2/Hz, the floor estimate at `qs[1]` on `ref_f`.
+    flatness : float
+        `N_hat(qs[2]) / N_hat(qs[0])` at 20 Hz.
+
+    All of `n_hat` and `flatness` are NaN when fewer than 200 spectra
+    survive either guard.
     """
     from scipy.stats import chi2
 
@@ -112,12 +122,14 @@ def _record_floor(diag, nu, deep_frac=80, qs=(0.02, 0.05, 0.30),
     # one deployment do not always share a grid, so pool only the entries
     # that share one, keeping the largest group.
     groups = {}
-    for Pf, dep, fg in diag:
-        groups.setdefault(np.asarray(fg, dtype=float).tobytes(), []).append((Pf, dep, fg))
+    for Pf, dep, fg, nu in diag:
+        groups.setdefault(np.asarray(fg, dtype=float).tobytes(), []).append((Pf, dep, fg, nu))
     best = max(groups.values(), key=lambda g: sum(int(d[0].shape[0]) for d in g))
     P = np.concatenate([d[0] for d in best])
     dep = np.concatenate([d[1] for d in best])
     f = np.asarray(best[0][2], dtype=float)
+    # one grid means one (fs, nperseg) pair, so one nu
+    nu = float(best[0][3])
     good = np.isfinite(dep)
     if good.sum() < 200:
         return ref, np.full(ref.size, np.nan), np.nan
@@ -167,7 +179,10 @@ def chi_dataset(ctd: xr.Dataset, casts: xr.Dataset, c1, ranges: pd.DataFrame,
     xarray.Dataset
         On dim `time` (window centers), with data variables `depth`,
         `p`, `lon`, `lat`, `spd`, `chi`, `phi`, `kmax`, `n_bins`,
-        `range_id`, `chi_flag`, coordinate `cast`, and, when
+        `range_id`, `chi_flag`, `direction` ("down", "up", or "none"
+        outside every cast; `spd` is the speed magnitude, so upcast
+        windows, where the sensor is likely in the wake, are only told
+        apart by this variable), coordinate `cast`, and, when
         `params.closure` is True, `chi_tot`, `eps_chi`, `r`, `n2`, `Tz`,
         `Sz`, `Rrho`. Group attrs carry every `ChiParams` field,
         `flag_meanings`, `range_fs`, `n_ranges`, `n_windows` and
@@ -185,7 +200,7 @@ def chi_dataset(ctd: xr.Dataset, casts: xr.Dataset, c1, ranges: pd.DataFrame,
         no range yields a full window.
     """
     if not params.enabled or params.gain is None:
-        raise ValueError("add_chi needs ChiParams with enabled=True and a gain")
+        raise ValueError("chi_dataset needs ChiParams with enabled=True and a gain")
     floor = resolve(params.noise)
     time_ns = ctd["time"].values.astype("datetime64[ns]").astype("int64")
     spd16 = np.abs(gap_aware_rate(ctd["depth"].values, ctd["time"].values, params.spd_smooth))
@@ -229,11 +244,14 @@ def chi_dataset(ctd: xr.Dataset, casts: xr.Dataset, c1, ranges: pd.DataFrame,
                  chi_flag=("time", out["flag"])),
             coords=dict(time=centers_ns.astype("datetime64[ns]"))))
         if out["diag_idx"].size:
-            diag.append((out["diag_Pf"], env["depth"][out["diag_idx"]], out["diag_f"]))
+            diag.append((out["diag_Pf"], env["depth"][out["diag_idx"]], out["diag_f"],
+                         welch_dof(float(r.fs), params.window, params.nsec)))
     if not pieces:
         raise ValueError("no full chi window in any range")
     ds = xr.concat(pieces, dim="time")
-    ds = ds.assign_coords(cast=("time", _label_casts(ds["time"].values, casts)))
+    label, direction = _label_casts(ds["time"].values, casts)
+    ds = ds.assign_coords(cast=("time", label))
+    ds["direction"] = ("time", direction)
 
     if params.closure:
         # the table reaches half a Welch bin above kmax_cap because that is
@@ -254,9 +272,12 @@ def chi_dataset(ctd: xr.Dataset, casts: xr.Dataset, c1, ranges: pd.DataFrame,
         ds["chi_flag"] = ("time", flag.astype(np.uint8))
 
     ds["chi"].attrs = dict(long_name="temperature-gradient variance dissipation, resolved band", units="K^2/s")
-    ds["phi"].attrs = dict(long_name="noise fraction of the band integral", units="1")
+    ds["phi"].attrs = dict(long_name="noise fraction of the band integral", units="1",
+                           comment="inf where the raw band integral is not positive")
     ds["kmax"].attrs = dict(long_name="upper integration limit", units="cpm")
     ds["spd"].attrs = dict(long_name="fall rate", units="m/s")
+    ds["direction"].attrs = dict(long_name="profiling direction of the enclosing cast",
+                                 flag_values="down up none")
     for name in ("depth", "p", "lon", "lat"):
         ds[name].attrs = dict(ctd[name].attrs)
     ds["chi_flag"].attrs = dict(long_name="quality flag bitmask", flag_meanings=FLAG_MEANINGS)
@@ -273,12 +294,13 @@ def chi_dataset(ctd: xr.Dataset, casts: xr.Dataset, c1, ranges: pd.DataFrame,
         attrs["noise_records"] = floor.records
         attrs["noise_measured"] = floor.measured
         attrs["noise_nu"] = float(floor.nu)
-        rf, rn, flat = _record_floor(diag, floor.nu)
+        rf, rn, flat = _record_floor(diag)
         attrs["record_floor_f"] = [float(v) for v in rf]
         attrs["record_floor_n"] = [float(v) for v in rn]
         attrs["record_flatness_20hz"] = float(flat)
         ref = floor.at(rf)
-        ratio_20 = float(rn[2] / ref[2])
+        j20 = int(np.argmin(np.abs(rf - 20.0)))
+        ratio_20 = float(rn[j20] / ref[j20])
         if np.all(np.isfinite(rn)) and ratio_20 > 10 and flat < 1.6:
             logger.warning(
                 "record floor estimate is %.1fx the shipped floor at 20 Hz "
@@ -317,6 +339,7 @@ def add_chi(l1: xr.DataTree, l0_files, params: ChiParams) -> xr.DataTree:
         When `params.enabled` is False or `params.gain` is None, or
         propagated from `chi_dataset`/`load_c1` when no data survive.
     """
+    # checked here as well so a bad config fails before load_c1 reads files
     if not params.enabled or params.gain is None:
         raise ValueError("add_chi needs ChiParams with enabled=True and a gain")
     c1, ranges = load_c1(l0_files, gap=params.gap)

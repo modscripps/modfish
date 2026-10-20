@@ -3,7 +3,7 @@ and the band integral (spec "Estimator per window")."""
 
 import gsw
 import numpy as np
-from scipy.signal import welch
+from scipy.signal import get_window, welch
 
 from modfish.chi.config import (
     FLAG_EMPTY,
@@ -72,6 +72,46 @@ def window_spectrum(x, fs, nsec):
     return welch(np.asarray(x, dtype=float), fs=fs, window="hamming", nperseg=nperseg,
                  noverlap=nperseg // 2, detrend="linear", scaling="density",
                  return_onesided=True)
+
+
+def welch_dof(fs, window, nsec):
+    """Equivalent degrees of freedom of a `window_spectrum` estimate.
+
+    `nu = 2 K / (1 + 2 sum_{m=1}^{K-1} (1 - m/K) rho(m)^2)` for `K`
+    Hamming segments, with `rho(m)` the window overlap correlation at a
+    shift of `m` segment steps, the standard result for overlapped
+    segments of Gaussian white noise. It ignores the per-segment detrend, which lowers the measured value by
+    well under 1 % away from the lowest bins. At 325.52 Hz, a 2 s window
+    and 0.5 s segments it gives 11.03, the value measured from white noise
+    for the shipped noise floor.
+
+    Parameters
+    ----------
+    fs : float
+        Sampling rate, Hz.
+    window : float
+        Length of the record the spectrum is computed over, s.
+    nsec : float
+        Welch segment length, s.
+
+    Returns
+    -------
+    float
+        Equivalent degrees of freedom.
+    """
+    nw = int(round(window * fs))
+    nperseg = int(round(nsec * fs))
+    step = nperseg - nperseg // 2
+    k = (nw - nperseg) // step + 1
+    w = get_window("hamming", nperseg)
+    w2 = np.sum(w**2)
+    s = 0.0
+    for m in range(1, k):
+        if m * step >= nperseg:
+            break
+        rho = np.sum(w[: nperseg - m * step] * w[m * step:]) / w2
+        s += (1 - m / k) * rho**2
+    return 2 * k / (1 + 2 * s)
 
 
 def spectral_factor(f, fs, spd, params: ChiParams):
@@ -245,7 +285,9 @@ def run_range(c1, fs, spd, dtdc_val, params: ChiParams, noise=None, diag_stride=
             Noise fraction of the band, `chi_noise / (chi + chi_noise)`.
             0.0 where `noise` is None and an estimate exists. NaN where
             the window did not yield a value, same convention as `chi`
-            and `kmax`.
+            and `kmax`. `inf` (flagged `FLAG_NOISE`) where the raw band
+            integral `chi + chi_noise` is not positive, which a positive
+            raw spectrum does not produce in practice.
         `kmax` : numpy.ndarray of float
             Upper edge of the wavenumber band summed, cpm, NaN where no
             bin survived.
