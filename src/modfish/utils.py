@@ -51,7 +51,7 @@ def nsqfcn(s, t, p, p0, dp, lon, lat):
     1. drops samples with negative pressure or NaN in `s` or `t`, and
        flips an upward profile,
     2. low-pass filters `t`, `s` and `p` with a Hanning window of width
-       `dp`,
+       `dp` (skipped when the data are spaced more than `dp/2` apart),
     3. interpolates `t` and `s` onto `p0, p0 + dp, p0 + 2 dp, ...`,
     4. computes the potential density of the upper and lower point of
        each grid interval, referenced to the pressure halfway between
