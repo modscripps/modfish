@@ -91,12 +91,14 @@ def nsqfcn(s, t, p, p0, dp, lon, lat):
     if p[-1] < p[0]:
         s, t, p = s[::-1], t[::-1], p[::-1]
 
-    # Low pass over dp. A window of one sample or less means no filtering.
+    # Low pass over dp. A window shorter than 4 points means no filtering:
+    # np.hanning(2) is all zeros, and normalizing it gave NaN everywhere for
+    # data spaced between dp/2 and dp, which is already coarser than dp/2.
     dp_med = np.median(np.diff(p))
     if not dp_med > 0:
         return np.nan, np.nan
     nwin = int(2 * np.floor(dp / dp_med))
-    if nwin > 1:
+    if nwin >= 4:
         if p.size <= 3 * nwin:  # filtfilt's default padlen
             return np.nan, np.nan
         b = np.hanning(nwin)

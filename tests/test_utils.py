@@ -219,3 +219,14 @@ def test_gap_runs_splits_at_gaps_only():
     assert [(r.start, r.stop) for r in runs] == [(0, 10), (10, 15), (15, 18)]
     assert [(r.start, r.stop) for r in gap_runs(t[:10])] == [(0, 10)]
     assert gap_runs(t[:1]) == [slice(0, 1)]
+
+
+def test_nsqfcn_coarse_profile_returns_finite_n2():
+    """6 dbar spacing with dp=10 built np.hanning(2), which is all zeros, so
+    the normalized window was NaN and so was every N^2 (the same bug as
+    gvpy 2b4bf2a)."""
+    p = np.arange(0, 1000.5, 6.0)
+    t = 20 - 16 * p / 1000
+    s = 34 + p / 1000
+    n2, _ = modfish.utils.nsqfcn(s, t, p, p0=0, dp=10, lon=-125.0, lat=45.0)
+    assert np.isfinite(n2).all() and (n2 > 0).all()

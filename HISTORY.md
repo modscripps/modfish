@@ -88,6 +88,10 @@
     can now come out negative.
 
 ### Bug fixes
+-   `utils.nsqfcn` (and so `io.add_n2`) returned all-NaN N^2 for
+    profiles spaced between `dp/2` and `dp` (e.g. 6 dbar data with the
+    default `dp=10`): the two-point Hanning window is all zeros. Such
+    data are now used unsmoothed, as gvpy does since its 2b4bf2a.
 -   `utils.datetime_linspace` returned a constant array for datetime64[ns]
     input, the unit `mattime_to_datetime64` returns. The fast-time
     fallback in `io.load_fctd_raw_mat` therefore stamped every
