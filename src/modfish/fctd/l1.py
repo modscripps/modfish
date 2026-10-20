@@ -68,13 +68,13 @@ def _nearest_gap_seconds(time: np.ndarray, ref_time: np.ndarray) -> np.ndarray:
 def _add_position(ctd: xr.Dataset, gps: xr.Dataset | None, config: FCTDConfig) -> xr.Dataset:
     """Interpolate GPS `lon`/`lat` onto ctd time, or fall back to a fixed latitude.
 
-    Stretches of ctd time further than `config.gps_max_gap` from the
-    nearest GPS fix are masked: `lon` is set to NaN, and `lat` is set to
-    `config.latitude_fallback` if given, else NaN. Samples beyond the GPS
-    record's own time span are extrapolated as a constant equal to the
-    nearest endpoint (`np.interp`'s default clamping behavior); that
-    clamp only matters up to `gps_max_gap` past the GPS range, since
-    stretches beyond it are masked the same as any other gap.
+    `lat` and `lon` are linearly interpolated between fixes and held at
+    the nearest fix beyond the GPS record's own span. Stretches of ctd
+    time further than `config.gps_max_gap` from the nearest fix keep that
+    interpolated or held `lat`, since depth needs a latitude and varies
+    with it by well under a part in 10^4 over any plausible drift, but
+    get NaN `lon`. SA, CT and sgth0 are therefore NaN in those stretches.
+    `config.latitude_fallback` is used only when there is no usable fix.
 
     Parameters
     ----------
@@ -89,8 +89,10 @@ def _add_position(ctd: xr.Dataset, gps: xr.Dataset | None, config: FCTDConfig) -
     Returns
     -------
     xr.Dataset
-        `ctd` with `lon`, `lat` added and `attrs["latitude_source"]` set to
-        "gps" or "fallback".
+        `ctd` with `lon`, `lat` added, `attrs["latitude_source"]` set to
+        "gps" or "fallback", and, with GPS, `attrs["n_lon_masked"]` (the
+        number of samples whose `lon` was masked) plus a
+        `position_note` when that number is positive.
 
     Raises
     ------
@@ -136,21 +138,27 @@ def _add_position(ctd: xr.Dataset, gps: xr.Dataset | None, config: FCTDConfig) -
     gps_time_i8 = gps_time.astype("datetime64[ns]").astype("int64")
 
     lat = np.interp(time_i8, gps_time_i8, gps_lat)
-    lon = np.interp(time_i8, gps_time_i8, gps_lon)
+    # unwrap so a track across 180 degrees does not interpolate through 0
+    lon_unwrapped = np.rad2deg(np.unwrap(np.deg2rad(gps_lon)))
+    lon = np.interp(time_i8, gps_time_i8, lon_unwrapped)
+    if not np.allclose(lon_unwrapped, gps_lon):
+        lon = (lon + 180.0) % 360.0 - 180.0
 
     gap = _nearest_gap_seconds(time, gps_time)
     masked = gap > config.gps_max_gap
-    if masked.any():
-        if config.latitude_fallback is not None:
-            lat = np.where(masked, config.latitude_fallback, lat)
-        else:
-            lat = np.where(masked, np.nan, lat)
-        lon = np.where(masked, np.nan, lon)
+    lon = np.where(masked, np.nan, lon)
 
     ctd = ctd.assign(lat=("time", lat), lon=("time", lon))
     ctd["lat"].attrs = dict(long_name="latitude", units="degrees_north")
     ctd["lon"].attrs = dict(long_name="longitude", units="degrees_east")
     ctd.attrs["latitude_source"] = "gps"
+    ctd.attrs["n_lon_masked"] = int(masked.sum())
+    if masked.any():
+        ctd.attrs["position_note"] = (
+            f"{int(masked.sum())} samples lie more than gps_max_gap="
+            f"{config.gps_max_gap} s from a GPS fix: lon is NaN there and lat "
+            "is interpolated or held from the nearest fixes, so depth is valid "
+            "but SA, CT and sgth0 are NaN")
     return ctd
 
 
@@ -221,8 +229,6 @@ def _apply_tc(ctd: xr.Dataset, config: FCTDConfig) -> xr.Dataset:
         function-call-style summary of the whole chain (or "none").
     """
     ctd = ctd.assign(t_raw=ctd["t"].copy(deep=True), c_raw=ctd["c"].copy(deep=True))
-    ctd["t_raw"].attrs = dict(ctd["t"].attrs)
-    ctd["c_raw"].attrs = dict(ctd["c"].attrs)
 
     t_attrs = dict(ctd["t"].attrs)
     c_attrs = dict(ctd["c"].attrs)

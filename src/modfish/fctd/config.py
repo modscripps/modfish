@@ -13,6 +13,15 @@ from modfish.chi.config import ChiParams
 #: naming its replacement.
 _REMOVED_TC_KEYS = {"phase_match", "N", "f0", "tcfit"}
 
+#: Top-level keys no longer in `FCTDConfig`, with the reason given in the
+#: error. `keep_counts=True` left count-typed `t_raw`/`c_raw` in the tree,
+#: which `make_l1` always refused.
+_REMOVED_TOP_KEYS = {
+    "keep_counts": "keep_counts was removed: make_l1 cannot run on a tree "
+                   "with kept counts. Call concat_l0(..., keep_counts=True) "
+                   "directly to inspect raw counts.",
+}
+
 
 @dataclasses.dataclass
 class CastParams:
@@ -21,7 +30,9 @@ class CastParams:
     Parameters
     ----------
     smooth : float
-        s, dp/dt smoothing (Matlab: 256 samples at 16 Hz)
+        s, length of the median filter and of the boxcar applied to
+        pressure before differentiation (Matlab: 256 samples at 16 Hz).
+        Time gaps longer than this split the record for cast detection.
     wlim : float
         dbar/s threshold (Matlab: 0.025 dbar/sample at 16 Hz)
     min_range : float
@@ -119,15 +130,16 @@ class FCTDConfig:
     chi : ChiParams
         Microconductivity chi parameters
     latitude_fallback : float | None
-        degrees_north, used, with a warning, when GPS is absent
+        degrees_north, used, with a warning, when the record has no usable
+        GPS fix. `lon` is then NaN throughout, and so are SA, CT and sgth0.
     gps_max_gap : float
-        s, max GPS gap to interpolate across
+        s, samples further than this from a GPS fix get NaN `lon`; their
+        `lat` is still interpolated (or held) from the nearest fixes
     dpdt_smooth : float
         s, dPdt smoothing window
-    keep_counts : bool
-        keep *_raw count variables through concat
     groups : tuple of str or None
-        L0 group names `concat_l0` loads; None loads every group. Set to
+        L0 group names `concat_l0` loads; None loads every group. A single
+        string is taken as one group name. Set to
         ``("ctd", "gps")`` to build the CTD product without the `efe`
         stream, which dominates memory.
     """
@@ -137,13 +149,15 @@ class FCTDConfig:
     grid: GridParams = dataclasses.field(default_factory=GridParams)
     chi: ChiParams = dataclasses.field(default_factory=ChiParams)
     latitude_fallback: float | None = None  # used, with a warning, when GPS is absent
-    gps_max_gap: float = 300.0  # s, max GPS gap to interpolate across
+    gps_max_gap: float = 300.0  # s, lon NaN beyond this from a fix
     dpdt_smooth: float = 1.0  # s, dPdt smoothing window
-    keep_counts: bool = False  # keep *_raw count variables through concat
     groups: tuple[str, ...] | None = None  # L0 groups concat_l0 loads; None = all
 
     def __post_init__(self):
-        if self.groups is not None:
+        if isinstance(self.groups, str):
+            # tuple("ctd") would split it into ("c", "t", "d")
+            self.groups = (self.groups,)
+        elif self.groups is not None:
             self.groups = tuple(str(g) for g in self.groups)
 
     @classmethod
@@ -166,9 +180,9 @@ class FCTDConfig:
         ------
         ValueError
             If unknown keys are provided, if nested sections are not dicts,
-            if a scalar (non-section) field is given a dict value, or if
-            `tc` carries a key removed in the T-C correction sub-project
-            (`phase_match`, `N`, `f0`, `tcfit`).
+            if a scalar (non-section) field is given a dict value, if `tc`
+            carries a key removed in the T-C correction sub-project
+            (`phase_match`, `N`, `f0`, `tcfit`), or if `keep_counts` is set.
         """
         # Mapping of nested section names to their dataclass types and field sets
         nested_sections = {
@@ -179,6 +193,10 @@ class FCTDConfig:
         }
 
         fctd_config_fields = {f.name for f in dataclasses.fields(FCTDConfig)}
+
+        for key, reason in _REMOVED_TOP_KEYS.items():
+            if key in d:
+                raise ValueError(reason)
 
         # Check for unknown keys at top level
         top_level_unknown = set(d.keys()) - fctd_config_fields

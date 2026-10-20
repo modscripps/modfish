@@ -42,12 +42,31 @@ def test_find_casts_cast_reaches_record_end():
     assert casts.iloc[-1].i1 >= stop - (16 * 16)  # up to one smooth window from the end
 
 
-def test_find_casts_gap_splits_nothing_spurious():
+def test_find_casts_full_range_casts_on_a_gap_free_record():
     p, time = sawtooth_pressure(n_casts=2)
     casts_full = find_casts(p, time)
     assert (casts_full.i1 > casts_full.i0).all()
     ranges = p[casts_full.i1.values] - p[casts_full.i0.values]
     assert (np.abs(ranges) > 200).all()
+
+
+def test_find_casts_no_cast_spans_a_time_gap():
+    """An upcast 200 -> 50 dbar, a 600 s gap, then an upcast 300 -> 150
+    dbar. Over the sample index the pressure jump at the gap looks like a
+    250 dbar downcast that passes min_range and min_duration."""
+    fs, w = 16.0, 1.0
+    up1 = np.linspace(200, 50, int(150 / w * fs))
+    up2 = np.linspace(300, 150, int(150 / w * fs))
+    p = np.concatenate([up1, up2])
+    t0 = np.datetime64("2024-11-20")
+    t1 = t0 + (np.arange(up1.size) / fs * 1e9).astype("timedelta64[ns]")
+    t2 = t1[-1] + np.timedelta64(600, "s") + (np.arange(up2.size) / fs * 1e9).astype("timedelta64[ns]")
+    time = np.concatenate([t1, t2])
+    casts = find_casts(p, time)
+    assert list(casts.direction) == ["up", "up"]
+    # each upcast keeps its own samples up to the smoothing edge
+    assert casts.iloc[0].i1 < up1.size <= casts.iloc[1].i0
+    assert casts.iloc[1].i0 - up1.size < 16 * 2
 
 
 def test_label_casts_marks_outside_zero():
@@ -133,3 +152,16 @@ def test_odd_window_caps_to_record_length():
 
     n_odd_cap = _odd_window(seconds=100.0, fs=16.0, n_max=11)
     assert n_odd_cap == 11
+
+
+def test_find_casts_short_dropouts_do_not_split_a_cast():
+    """Acquisition hiccups of 0.2 to 1 s (three to sixteen missing 16 Hz
+    samples) are bridged by the smoothing window. On MOTIVE d07 splitting
+    at them turned whole upcasts into 16 to 74 s fragments."""
+    p, time = sawtooth_pressure(n_casts=2)
+    keep = np.ones(p.size, dtype=bool)
+    for i0 in (1500, 3000, 4100, 9000):
+        keep[i0:i0 + 8] = False  # 0.5 s dropouts inside casts
+    casts_full = find_casts(p, time)
+    casts = find_casts(p[keep], time[keep])
+    assert list(casts.direction) == list(casts_full.direction)

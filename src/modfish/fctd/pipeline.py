@@ -84,7 +84,7 @@ def process_deployment(
         )
         return l1_path, grid_path
 
-    l0_tree = concat_l0(files, keep_counts=config.keep_counts, groups=config.groups)
+    l0_tree = concat_l0(files, groups=config.groups)
 
     try:
         l1_tree = make_l1(l0_tree, config)

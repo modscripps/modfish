@@ -5,6 +5,7 @@ decoded stream, plus a root dataset of per-block clock forensics on dim
 `block`): per-file `.nc` files as written by `modfish.modraw.convert`.
 """
 
+import bisect
 import logging
 from pathlib import Path
 
@@ -71,6 +72,45 @@ def _load_groups(path: Path, groups=None) -> dict:
         }
 
 
+def _ordered_keep(t: np.ndarray) -> np.ndarray:
+    """Mask of the longest non-decreasing subsequence of `t`.
+
+    The fewest records whose removal leaves `t` in order. A single record
+    stamped far early or far late is the only one left out, wherever it
+    sits.
+
+    Parameters
+    ----------
+    t : numpy.ndarray
+        Timestamps (datetime64 or integer), in file order.
+
+    Returns
+    -------
+    numpy.ndarray of bool
+        True for the records kept.
+    """
+    v = t.astype("int64")
+    tails_val = []  # smallest tail value of a subsequence of each length
+    tails_idx = []
+    prev = np.full(v.size, -1)
+    for i, x in enumerate(v):
+        j = bisect.bisect_right(tails_val, x)
+        if j:
+            prev[i] = tails_idx[j - 1]
+        if j == len(tails_val):
+            tails_val.append(x)
+            tails_idx.append(i)
+        else:
+            tails_val[j] = x
+            tails_idx[j] = i
+    keep = np.zeros(v.size, dtype=bool)
+    i = tails_idx[-1]
+    while i >= 0:
+        keep[i] = True
+        i = prev[i]
+    return keep
+
+
 def _drop_misstamped(ds: xr.Dataset) -> tuple[xr.Dataset, int]:
     """Drop records stamped later than a record that follows them in the file.
 
@@ -79,10 +119,12 @@ def _drop_misstamped(ds: xr.Dataset) -> tuple[xr.Dataset, int]:
     into the records that follow (modscripps/modfish#41). Sorted by time,
     they would interleave with the real record. A backward time step within
     the first 16 records drops every record before it, since a block can be
-    stamped late by less than its own length. Anywhere in the file, a record
-    stamped later than any record after it is dropped. Exact duplicate timestamps
-    are removed first (first occurrence kept, as `concat_l0` does), so a
-    repeated record is not counted here.
+    stamped late by less than its own length. Past that, the longest
+    time-ordered subsequence of the remaining records is kept, so the
+    fewest records go: one record stamped far early or far late drops
+    alone, without taking the records on the other side of it along.
+    Exact duplicate timestamps are removed first (first occurrence kept,
+    as `concat_l0` does), so a repeated record is not counted here.
 
     Parameters
     ----------
@@ -103,13 +145,15 @@ def _drop_misstamped(ds: xr.Dataset) -> tuple[xr.Dataset, int]:
         t = ds["time"].values
     if t.size < 2:
         return ds, 0
-    later_min = np.minimum.accumulate(t[::-1])[::-1]
-    bad = np.zeros(t.size, dtype=bool)
-    bad[:-1] = t[:-1] > later_min[1:]
     back = np.flatnonzero(t[1:] < t[:-1]) + 1
-    back = back[back <= _LEADING_RECORDS]
-    if back.size:
-        bad[: back.max()] = True
+    if not back.size:
+        return ds, 0
+    bad = np.zeros(t.size, dtype=bool)
+    lead = back[back <= _LEADING_RECORDS]
+    if lead.size:
+        bad[: lead.max()] = True
+    rest = np.flatnonzero(~bad)
+    bad[rest[~_ordered_keep(t[rest])]] = True
     if bad.any():
         ds = ds.isel(time=~bad)
     return ds, int(bad.sum())
@@ -259,7 +303,7 @@ def concat_l0(files: list, keep_counts: bool = False, groups=None) -> xr.DataTre
             if name not in group_names:
                 group_names.append(name)
 
-    ranges = [_time_range(groups) for groups in per_file_groups]
+    ranges = [_time_range(fg) for fg in per_file_groups]
     for i in range(len(ranges) - 1):
         r0, r1 = ranges[i], ranges[i + 1]
         if r0 is None or r1 is None:
@@ -281,7 +325,7 @@ def concat_l0(files: list, keep_counts: bool = False, groups=None) -> xr.DataTre
             )
 
     n_misstamped = 0
-    for file_groups, path in zip(per_file_groups, files):
+    for file_groups, path in zip(per_file_groups, files, strict=True):
         if "ctd" in file_groups:
             file_groups["ctd"], n = _drop_misstamped(file_groups["ctd"])
             if n:
@@ -290,15 +334,12 @@ def concat_l0(files: list, keep_counts: bool = False, groups=None) -> xr.DataTre
 
     result_groups = {}
     for name in group_names:
-        parts = [groups[name] for groups in per_file_groups if name in groups]
-        if not parts:
-            continue
-
+        parts = [fg[name] for fg in per_file_groups if name in fg]
         ds = xr.concat(parts, dim="time", combine_attrs="override")
         ds = ds.sortby("time")
         dup = pd.Index(ds["time"].values).duplicated()
         if dup.any():
-            ds = ds.sel(time=~dup)
+            ds = ds.isel(time=~dup)
 
         if name == "ctd":
             ds, n_stale = _drop_stale_after_gap(ds)

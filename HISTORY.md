@@ -3,6 +3,9 @@
 ## unreleased
 
 ### New Features
+-   `modfish.fctd.depth_edges` (formerly the private `grid._depth_edges`,
+    which stays as an alias) and `modfish.utils.gap_runs`, the index
+    slices of a time axis between gaps.
 -   The `chi` group carries a per-window `direction` ("down", "up", or
     "none" outside every cast). `spd` is a speed magnitude, so upcast
     windows were only distinguishable by joining against `casts`.
@@ -85,6 +88,34 @@
     can now come out negative.
 
 ### Bug fixes
+-   `fctd.find_casts` smooths and differentiates pressure per stretch
+    between time gaps longer than `CastParams.smooth` (16 s). A pressure
+    jump across a gap made a fake cast (a 250 dbar "downcast" across a
+    600 s gap in a synthetic record), and casts next to a gap spanned it.
+    The median filter now replicates edge samples (`medfilt` zero-padded,
+    which bent the smoothed pressure for half a window at every record
+    and gap edge). On MOTIVE d07 the count stays at 495; the five casts
+    next to the three gaps over 16 s now end or start where the data do.
+-   `fctd.concat._drop_misstamped` keeps the longest time-ordered
+    subsequence after the leading-block rule. One record stamped far
+    early dropped every record before it (500 of 1000 in a test file).
+-   A GPS gap longer than `gps_max_gap` no longer sets `lat`, and with it
+    `depth`, to NaN. `lat` is interpolated or held from the nearest
+    fixes, `lon` stays NaN there, and the `ctd` attrs carry
+    `n_lon_masked` and a `position_note`. `latitude_fallback` now applies
+    only when the record has no usable fix.
+-   Longitude is unwrapped before interpolating, so a track across 180
+    degrees no longer interpolates through 0.
+-   `fctd.grid.depth_edges` builds centers from an integer count, so a
+    `dz` such as 0.1 no longer adds a bin past `depth_max`. It raises a
+    clear error on all-NaN depth and on `depth_min > depth_max`.
+-   `grid_casts` derives its depth range from cast samples only, leaves a
+    cast without labeled samples NaN/NaT instead of raising, and no
+    longer warns once per cast on all-NaN `lon`.
+-   `FCTDConfig.keep_counts` is removed: `True` always failed in
+    `make_l1`. A config that sets it gets an error naming
+    `concat_l0(..., keep_counts=True)`. `groups: ctd` (a string) is read
+    as one group instead of `("c", "t", "d")`.
 -   `chi.fit.fit_gain_casts` takes the CTD sampling rate from the record
     span (`utils.sampling_interval`). The median step of 1 ms-quantized
     16 Hz stamps reads 62 ms, which biased the fitted gain 2 % high on a

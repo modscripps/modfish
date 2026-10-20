@@ -241,3 +241,64 @@ def test_grid_closure_exclude_flags_default_keeps_capped_windows(l1_tree):
 def test_config_reads_closure_exclude_flags():
     cfg = FCTDConfig.from_dict({"grid": {"closure_exclude_flags": 128}})
     assert cfg.grid.closure_exclude_flags == 128
+
+
+@pytest.mark.parametrize("dz,depth_max", [(0.1, 0.2), (0.1, 0.3), (0.3, 0.9), (0.2, 399.8)])
+def test_depth_edges_no_extra_bin_for_inexact_dz(dz, depth_max):
+    from modfish.fctd.grid import depth_edges
+
+    centers, edges = depth_edges(np.array([0.0, depth_max]), GridParams(dz=dz))
+    n = int(round(depth_max / dz)) + 1
+    assert centers.size == n
+    assert centers[-1] == pytest.approx(depth_max)
+    assert edges.size == n + 1
+
+
+def test_depth_edges_private_alias_kept():
+    from modfish.fctd.grid import _depth_edges, depth_edges
+
+    assert _depth_edges is depth_edges
+
+
+def test_depth_edges_rejects_inverted_range_and_all_nan_depth():
+    from modfish.fctd.grid import depth_edges
+
+    with pytest.raises(ValueError, match="depth_min"):
+        depth_edges(np.array([0.0, 10.0]), GridParams(depth_min=20.0, depth_max=10.0))
+    with pytest.raises(ValueError, match="finite depth"):
+        depth_edges(np.full(5, np.nan), GridParams())
+
+
+def test_grid_range_from_cast_samples_only(l1_tree):
+    """Deck and surface-soak samples are never gridded (they carry cast 0),
+    so they must not stretch the derived depth range."""
+    ctd = l1_tree["ctd"].to_dataset()
+    in_cast = ctd["depth"].values[ctd["cast"].values > 0]
+    g = grid_casts(l1_tree)
+    assert g.depth.values[0] >= 0.5 * np.floor(in_cast.min() / 0.5) - 1e-9
+    assert g.depth.values[-1] <= 0.5 * np.ceil(in_cast.max() / 0.5) + 1e-9
+
+
+def test_grid_fallback_latitude_emits_no_warning(l1_tree):
+    import warnings
+
+    tree = l1_tree.copy()
+    ctd = tree["ctd"].to_dataset()
+    ctd["lon"] = ("time", np.full(ctd.sizes["time"], np.nan))
+    tree["ctd"] = xr.DataTree(ctd)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        g = grid_casts(tree)
+    assert np.isnan(g.lon.values).all()
+
+
+def test_grid_cast_without_samples_gets_nat(l1_tree):
+    tree = l1_tree.copy()
+    casts = tree["casts"].to_dataset()
+    ctd = tree["ctd"].to_dataset()
+    last = int(casts.cast.values[-1])
+    ctd["cast"] = ctd["cast"].where(ctd["cast"] != last, 0)
+    tree["ctd"] = xr.DataTree(ctd)
+    g = grid_casts(tree)
+    assert np.isnat(g.time.sel(cast=last).values)
+    assert np.isnan(g.t.sel(cast=last).values).all()
