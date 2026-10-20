@@ -6,9 +6,7 @@ rate- or fall-speed-dependent parameter is an explicit argument. Running
 `correct` with every argument at its default is a no-op, so a cruise
 config opts into each step and no fitted value is buried in this module.
 The values fitted for FCTD1 (SBE49 serial 0537) on the 2025 MOTIVE cruise
-live in that cruise's config, with the analysis behind them in the
-`motive-cruise-proc` draft notebooks 04 to 06 and the write-up in that
-repo's book (`book/data/fctd_tc_correction.md`).
+live in that cruise's processing config.
 
 `correct` applies the chain in a fixed order, each step skippable on its
 own: a zero-phase low-pass on `t` and `c` (`lowpassfilter`), the sensor
@@ -391,7 +389,9 @@ def atanfit(x, f, Phi, W):
         Observed cross-spectral phase [rad], same shape as `f`.
     W : numpy.ndarray
         Square weight matrix, `numpy.diag` of the squared coherence. It enters
-        as `W**4`, so the weights act as coherence to the fourth power.
+        as `W**4`, so each frequency is weighted by coherence to the eighth
+        power. The MATLAB original (`ctd_proc2/atanfit.m`) does the same, to
+        emphasize the low frequencies where coherence is high.
 
     Returns
     -------
@@ -401,6 +401,14 @@ def atanfit(x, f, Phi, W):
     f = np.arctan(2 * np.pi * f * x[0]) + 2 * np.pi * f * x[1] + Phi
     f = np.matmul(np.matmul(f.transpose(), W**4), f)
     return f
+
+
+def _check_segments(m, N, span):
+    """Raise ValueError unless `span` holds at least two segments of `N` samples."""
+    if m < 2:
+        raise ValueError(
+            f"phase_correct needs at least 2 segments of N={N} samples in {span}, got {m}"
+        )
 
 
 def phase_correct(ds, N=128, f0=6.0, tcfit=None, return_spectra=False):
@@ -422,21 +430,17 @@ def phase_correct(ds, N=128, f0=6.0, tcfit=None, return_spectra=False):
         sampling interval is read from `time`, not assumed.
     N : int, optional
         Number of points per fit segment. Defaults to 128 (2**7), the value
-        used for 16 Hz SBE49 data in the cruise-1 processing notebook. gvpy
-        used 2**6 for 16 Hz and 2**9 for 24 Hz SBE9/11 data.
+        used for 16 Hz SBE49 FCTD data. gvpy used 2**6 for 16 Hz and 2**9 for
+        24 Hz SBE9/11 data.
     f0 : float, optional
         Cut-off frequency [Hz] of the low-pass filter `1 / (1 + (f/f0)**6)`
         applied to `t`, `c` and `p`. Defaults to 6.0, the gvpy value, which
-        was picked for 24 Hz data; increasing it filters less. The orphaned
-        copy of this code in `modfish.utils` used 9 with a stale comment.
-        `f0` was left untuned by the T-C correction analysis (FCTD
-        reprocessing sub-project 3, design decision 8), which kept
-        `phase_correct` as a diagnostic and moved the production correction
-        to `tc.correct`. The production parameters live in the cruise config
-        (`fctd.params.tc` in motive-cruise-proc `config.yml`), documented in
-        that repo's `book/data/fctd_tc_correction.md`.
+        was picked for 24 Hz data. Increasing it filters less. `f0` is not
+        tuned for 16 Hz data. `phase_correct` is kept as a diagnostic, and
+        the production correction is `tc.correct` with parameters set in
+        each cruise's processing config.
     tcfit : tuple or None, optional
-        Upper and lower pressure limit [dbar] of the range used for the phase
+        Lower and upper pressure limit [dbar] of the range used for the phase
         fit. Overrides `ds.attrs["tcfit"]`. If neither is given, defaults from
         `add_tcfit_default` are used.
     return_spectra : bool, optional
@@ -455,6 +459,14 @@ def phase_correct(ds, N=128, f0=6.0, tcfit=None, return_spectra=False):
         `phase_corrected`, all on frequency dimension `f` [Hz]. Attributes
         carry the fit results `tau1`, `L1`, the degrees of freedom `dof` and
         the 95% significance level for the coherence, `beta`.
+
+    Raises
+    ------
+    ValueError
+        If no sample lies inside `tcfit` or deeper than 1 dbar, or if
+        either span holds fewer than 2 segments of `N` samples. With
+        `return_spectra=True` the span deeper than 1 dbar needs 3, since
+        the after-correction spectra are taken on the trimmed output.
 
     Notes
     -----
@@ -512,7 +524,9 @@ def phase_correct(ds, N=128, f0=6.0, tcfit=None, return_spectra=False):
     # Only data within the tcfit pressure range. Note that this takes the
     # contiguous index span between the first and the last sample inside the
     # window, see Notes.
-    ii = np.squeeze(np.argwhere((ds.p.data > tcfit[0]) & (ds.p.data < tcfit[1])))
+    ii = np.flatnonzero((ds.p.data > tcfit[0]) & (ds.p.data < tcfit[1]))
+    if ii.size == 0:
+        raise ValueError(f"no sample with pressure inside tcfit {tcfit}")
     i1 = ii[0]
     i2 = ii[-1]
     n = i2 - i1 + 1
@@ -522,6 +536,7 @@ def phase_correct(ds, N=128, f0=6.0, tcfit=None, return_spectra=False):
     # number of segments = dof/2
     m = (n / N).astype("int64")
     logger.info("%d segments", m)
+    _check_segments(m, N, f"the tcfit range {tcfit}")
     # Frequency resolution at 2*m degrees of freedom.
     df = 1 / (N * dt)
 
@@ -571,7 +586,9 @@ def phase_correct(ds, N=128, f0=6.0, tcfit=None, return_spectra=False):
     logger.info("tau = %1.4fs, lag = %1.4fs", tau1, L1)
 
     # ---Apply phase correction and low-pass filter---
-    ii = np.squeeze(np.argwhere(ds.p.data > 1))
+    ii = np.flatnonzero(ds.p.data > 1)
+    if ii.size == 0:
+        raise ValueError("no sample deeper than 1 dbar to correct")
     i1 = ii[0]
     i2 = ii[-1]
     n = i2 - i1 + 1
@@ -580,6 +597,7 @@ def phase_correct(ds, N=128, f0=6.0, tcfit=None, return_spectra=False):
     i2 = (i1 + n).astype("int64")
     # number of segments = dof/2
     m = (n / N).astype("int64")
+    _check_segments(m, N, "the span deeper than 1 dbar")
 
     # Transfer function
     f = fft.ifftshift(np.linspace(-N / 2, N / 2 - 1, N) / N / dt)
@@ -646,6 +664,9 @@ def phase_correct(ds, N=128, f0=6.0, tcfit=None, return_spectra=False):
             out[v].attrs = ds[v].attrs
     out = out.assign_attrs(dict(tau1=tau1, L1=L1))
 
+    if not return_spectra:
+        return out
+
     # ---Recalculate spectra, coherence and phase---
     t1 = Adi["t"][int(N / 4) : -int(N / 4)]  # Now N elements shorter
     c1 = Adi["c"][int(N / 4) : -int(N / 4)]
@@ -656,6 +677,7 @@ def phase_correct(ds, N=128, f0=6.0, tcfit=None, return_spectra=False):
     # it from the length of t1 gives the same answer in that case and does not
     # blow up the reshape below otherwise.
     m = t1.size // N
+    _check_segments(m, N, "the corrected record (return_spectra needs one more than the correction)")
     dof = 2 * m  # Number of degrees of freedom (power of 2)
     df = 1 / (N * dt)  # Frequency resolution at dof degrees of freedom.
 
@@ -681,9 +703,6 @@ def phase_correct(ds, N=128, f0=6.0, tcfit=None, return_spectra=False):
 
     # Cross-spectral phase estimates
     Phit1c1n = np.arctan2(np.imag(Ct1c1n), np.real(Ct1c1n))
-
-    if not return_spectra:
-        return out
 
     spectra = xr.Dataset(
         coords=dict(f=("f", fn, dict(long_name="frequency", units="Hz"))),
@@ -778,7 +797,7 @@ def plot_spectra(spectra):
         yscale="log",
         xscale="log",
         xlabel="frequency [Hz]",
-        ylabel=r"spectral density [mmho$^2$/cm$^2$/Hz]",
+        ylabel=r"spectral density [(S/m)$^2$/Hz]",
         title="conductivity spectra",
     )
 
@@ -826,9 +845,9 @@ def response_correction(
     Parameters
     ----------
     ds : xarray.Dataset
-        CTD time series with variable `var` on an evenly sampled `time`
-        coordinate of dtype datetime64. The sampling interval is read
-        from `time`, not assumed.
+        CTD time series with variable `var` on a `time` coordinate of
+        dtype datetime64. The sampling interval is read from `time`, not
+        assumed. Time gaps are allowed, see Notes.
     lag : float
         Sensor lag [s]. `exp(+i 2 pi f lag)` advances the record by
         `lag`, so a positive `lag` means `var` (temperature) physically
@@ -950,9 +969,9 @@ def thermal_mass_correction(
     Parameters
     ----------
     ds : xarray.Dataset
-        CTD time series with variables `t` [degC] and `c` on an evenly
-        sampled `time` coordinate of dtype datetime64. The sampling interval
-        is read from `time`, not assumed.
+        CTD time series with variables `t` [degC] and `c` on a `time`
+        coordinate of dtype datetime64. The sampling interval is read from
+        `time`, not assumed. Time gaps are allowed, see Notes.
     alpha : float, optional
         Amplitude of the thermal anomaly. Must be positive: it divides into
         the filter coefficient `b = 1 - 2a/alpha`, so `alpha = 0` has no
@@ -971,8 +990,7 @@ def thermal_mass_correction(
         `0.1 * (1 + 0.006 * (t - 20))`, evaluated per sample on the
         (gap-filled) input `t`. `"constant"` uses the fixed `0.1` this
         function used before this parameter existed, and the value Lueck
-        & Picklo (1990) and the dead MATLAB toolbox branch used
-        throughout. The two agree exactly at 20 degC; over 3 to 27 degC
+        & Picklo (1990) used throughout. The two agree exactly at 20 degC; over 3 to 27 degC
         they differ by up to about 10% (see the table below).
     profile : dict or None, optional
         Pressure profile of the product `alpha / beta` (`alpha * tau`,
@@ -1006,32 +1024,32 @@ def thermal_mass_correction(
 
     Notes
     -----
-    The discrete filter coefficients follow Lueck & Picklo (1990), not the
-    SBE Data Processing manual formula (both are quoted below for
-    reference); the two differ in how the sample rate enters the
-    coefficients. `alpha` and `beta` are picked from a Nyquist frequency
-    `fn = 1 / (2 * dt)` computed from the data's own time axis rather than a
-    fish-specific hardcoded value, which is what makes this function
-    fish-agnostic (for a 16 Hz record, `fn = 8`, matching the value gvpy
-    hardcoded for the SBE49-on-FCTD case this was ported from).
+    The code writes the discrete filter coefficient as
+    `a = 4 fn alpha / beta / (1 + 4 fn / beta)` (Lueck & Picklo, 1990) with the
+    Nyquist frequency `fn = 1 / (2 * dt)` taken from the data's own time
+    axis. With that `fn` they equal the SBE Data Processing manual
+    coefficients below (0.029867 for both at 16 Hz with the manual's
+    `alpha` and `beta`). The two forms differ only in `dc/dT`, which the
+    `dcdt` argument selects. For a 16 Hz record `fn = 8`, the value gvpy
+    hardcoded for the SBE49 on the FCTD.
 
-    `alpha` and `beta` are fitted per instrument in the cruise analysis (FCTD
-    reprocessing sub-project 3). For SBE49 serial 0537 the 2025 MOTIVE fit
-    gives `alpha` 0.010 and `beta` 1/12 per second, set in the cruise config
-    (`fctd.params.tc` in motive-cruise-proc `config.yml`) and documented in
-    that repo's `book/data/fctd_tc_correction.md`. Values seen in the wild:
+    `alpha` and `beta` are fitted per instrument. For SBE49 serial 0537
+    the 2025 MOTIVE fit gives `alpha` 0.010 and `beta` 1/12 per second,
+    set in that cruise's processing config. Values seen in the wild:
 
-    ======================================  =========  =========
-    source                                  alpha      1/beta
-    ======================================  =========  =========
-    SBE Data Processing manual (SBE49)      0.03       7.0
-    Lueck & Picklo (1990)                   0.02       0.10
-    dead MATLAB toolbox branch              0.02       0.10
-    Andriatis/Pinkel TFO 2021, serial 537   0.134      3.95
-    ======================================  =========  =========
+    ========================================  ===========  ==========
+    source                                    alpha        1/beta [s]
+    ========================================  ===========  ==========
+    SBE Data Processing manual (SBE49)        0.03         7.0
+    Lueck & Picklo (1990), 0.85 m/s tow       0.028        10
+    Lueck & Picklo (1990), 1.7 to 1.9 m/s     0.020-0.025  10
+    SBE fit quoted by Lueck & Picklo (1990)   0.015-0.020  10
+    Andriatis/Pinkel TFO 2021, serial 537     0.134        3.95
+    ========================================  ===========  ==========
 
-    The SBE Data Processing manual formula, given for reference and not
-    used here:
+    Lueck & Picklo recommend 0.028 for a cell pumped at 30e-6 m^3/s.
+
+    The SBE Data Processing manual formula:
 
     .. math::
 
@@ -1184,9 +1202,8 @@ def viscous_heating_temperature_correction(v, Pr: float = 12.4) -> np.ndarray:
         Flow speed past the sensor [m/s].
     Pr : float, optional
         Prandtl number. Defaults to 12.4, seawater's value at 2 degC
-        (Larson & Pedersen, 1996), the design temperature for the T-C
-        correction analysis's viscous-heating bound (FCTD reprocessing
-        sub-project 3).
+        (Larson & Pedersen, 1996), the temperature at which the FCTD T-C
+        analysis bounded the viscous-heating effect.
 
     Returns
     -------
@@ -1236,7 +1253,9 @@ def find_lags(ds: xr.Dataset, window: int = 80, lowpass: float = 4.0) -> xr.Data
     -------
     out : xarray.Dataset
         Dim `segment`. Data variables: `lag` [s] per window, positive
-        meaning `t` lags `c`; `dPdt`, the mean pressure rate of change over
+        meaning `t` lags `c`, NaN for a window that holds a NaN in `t` or
+        `c` or whose correlation is not finite; `dPdt`, the mean pressure
+        rate of change over
         each window, used as a proxy for fall speed; `p`, the mean pressure
         over each window.
 
@@ -1256,6 +1275,11 @@ def find_lags(ds: xr.Dataset, window: int = 80, lowpass: float = 4.0) -> xr.Data
     last), there is no neighbor on one side to fit through; that window's
     lag is returned as the raw (unrefined) peak lag instead of raising
     `IndexError`.
+
+    NaN in `t` or `c` are filled by `_fill_gaps` before the low-pass, since
+    `filtfilt` would otherwise spread a single NaN over the whole record.
+    The fill only keeps the filter finite; a window holding a filled
+    sample gets a NaN lag.
     """
     c = ds.c.data
     t = ds.t.data
@@ -1279,14 +1303,19 @@ def find_lags(ds: xr.Dataset, window: int = 80, lowpass: float = 4.0) -> xr.Data
         ti = np.diff(t[tr] - np.mean(t[tr]))
         correlation = signal.correlate(ci - np.mean(ci), ti - np.mean(ti), mode="full")
         lags = signal.correlation_lags(len(ci), len(ti), mode="full") * 1 / freq
+        if not np.isfinite(correlation).all():
+            return np.nan
         lag = np.argmax(np.abs(correlation))
         if lag == 0 or lag == len(correlation) - 1:
             return -lags[lag]
         inds = range(lag - 1, lag + 2)
         return -fit_2d_poly(lags[inds], correlation[inds])
 
-    t_lp = lowpassfilter(t, lowcut=lowpass, fs=freq)
-    c_lp = lowpassfilter(c, lowcut=lowpass, fs=freq)
+    t_filled, t_mask = _fill_gaps(t)
+    c_filled, c_mask = _fill_gaps(c)
+    gap = t_mask | c_mask
+    t_lp = lowpassfilter(t_filled, lowcut=lowpass, fs=freq)
+    c_lp = lowpassfilter(c_filled, lowcut=lowpass, fs=freq)
 
     n = len(t)
     m = window
@@ -1298,7 +1327,7 @@ def find_lags(ds: xr.Dataset, window: int = 80, lowpass: float = 4.0) -> xr.Data
     pi = []
     for si in start_index:
         tr = range(si, si + window)
-        lag = find_corrs(t_lp, c_lp, tr)
+        lag = np.nan if gap[tr].any() else find_corrs(t_lp, c_lp, tr)
         lagi.append(lag)
         dpdti.append(np.mean(dpdt[tr]))
         pi.append(np.mean(p[tr]))
@@ -1431,13 +1460,13 @@ def lag_tau_cost_map(
     `c`, `p`, and `salinity_roughness` is evaluated over `pmin`/`pmax`. The
     minimum of the returned map is the joint estimate of sensor lag and
     thermistor time constant; `find_lags`'s median lag is drawn on top of
-    it as an independent constraint in the analysis notebooks.
+    it as an independent constraint.
 
     Parameters
     ----------
     ds : xarray.Dataset
-        CTD time series with `t`, `c`, `p`, `dPdt` on an evenly sampled
-        `time` coordinate of dtype datetime64, as required by `correct`.
+        CTD time series with `t`, `c`, `p`, `dPdt` on a `time` coordinate
+        of dtype datetime64, as `correct` takes it.
     lags : array-like
         Sensor lag grid [s], `lag > 0` meaning `t` lags `c`.
     taus : array-like
@@ -1519,8 +1548,8 @@ def downup_separation(
         down/up pair, indexed by the down cast id), attrs `mean` (the mean
         of `sep` over all pairs).
     """
-    if pmin is None:
-        pmin = add_tcfit_default(ds.copy()).attrs["tcfit"][0]
+    # pmax=None means no upper bound here, so only pmin takes the default
+    pmin, _ = _fit_range_default(ds, pmin, np.inf)
 
     cast_id = ds["cast"].data
     t = ds["t"].data
@@ -1655,9 +1684,8 @@ def thermal_mass_cost_map(ds: xr.Dataset, alphas, taus, objective, **objective_k
     Parameters
     ----------
     ds : xarray.Dataset
-        CTD time series with `t`, `c`, `p` on an evenly sampled `time`
-        coordinate of dtype datetime64, as required by
-        `thermal_mass_correction`.
+        CTD time series with `t`, `c`, `p` on a `time` coordinate of dtype
+        datetime64, as `thermal_mass_correction` takes it.
     alphas : array-like
         Thermal-mass amplitude grid.
     taus : array-like
@@ -1758,9 +1786,10 @@ def correct(
     Parameters
     ----------
     ds : xarray.Dataset
-        CTD time series with `t`, `c`, `p`, `dPdt` on an evenly sampled
-        `time` coordinate of dtype datetime64. The sampling interval is
-        read from `time`, not assumed.
+        CTD time series with `t`, `c`, `p`, `dPdt` on a `time` coordinate
+        of dtype datetime64. The sampling interval is read from `time`, not
+        assumed. Time gaps are allowed: the chain runs on a uniform grid,
+        see Notes.
     lag : float, optional
         Sensor lag [s] for the response step, `lag > 0` meaning `t`
         lags `c`. Defaults to 0.0 (no advance).
@@ -1799,8 +1828,8 @@ def correct(
         and `c.attrs["processing"]` each list the steps that touched that
         variable as `"; "`-joined strings (`"none"` if none did), and
         `ds.attrs["corrections"]` is a function-call-style summary of the
-        whole chain with every parameter used, in the sub-project 2
-        style (`"none"` if nothing was applied).
+        whole chain with every parameter used (`"none"` if nothing was
+        applied).
 
     Raises
     ------

@@ -156,6 +156,31 @@ def test_phase_correct_improves_high_freq_coherence_phase():
     ).mean()
 
 
+def test_phase_correct_empty_tcfit_range_raises():
+    ds = make_synthetic_ctd(minutes=5)
+    with pytest.raises(ValueError, match="no sample"):
+        tc.phase_correct(ds, tcfit=(700, 800))
+
+
+def test_phase_correct_fit_range_shorter_than_two_segments_raises():
+    # 600 dbar over 4800 samples: 1.5 dbar holds ~12 samples, one segment
+    # of N=8 (m = 1), which used to end in a LAPACK error from detrend
+    ds = make_synthetic_ctd(minutes=5)
+    with pytest.raises(ValueError, match="segments"):
+        tc.phase_correct(ds, N=8, tcfit=(100, 101.5))
+
+
+def test_phase_correct_two_segment_record_without_spectra():
+    # two segments are enough for the correction; the after-correction
+    # spectra need three, and used to raise ZeroDivisionError either way
+    ds = make_synthetic_ctd().isel(time=slice(0, 2 * 128 + 10))
+    ds = ds.assign(p=("time", np.full(ds.sizes["time"], 50.0)))
+    out = tc.phase_correct(ds, tcfit=(10, 100))
+    assert out.sizes["time"] == 2 * 128 - 128 // 2
+    with pytest.raises(ValueError, match="return_spectra"):
+        tc.phase_correct(ds, tcfit=(10, 100), return_spectra=True)
+
+
 def test_plot_spectra_draws_four_panels():
     import matplotlib
 
@@ -217,6 +242,27 @@ def test_find_lags_recovers_known_lag():
     out = tc.find_lags(ds)
     assert float(out.lag.median()) == pytest.approx(4 / 16.0, abs=1 / 16.0)
     assert out.dPdt.sizes["segment"] == out.lag.sizes["segment"]
+
+
+@pytest.mark.parametrize("var", ["t", "c"])
+def test_find_lags_nan_marks_only_its_windows(var):
+    # one NaN used to spread through filtfilt over the whole record, so
+    # every window's correlation was NaN, argmax returned 0 and every
+    # window reported the edge lag without warning
+    ds = make_synthetic_ctd(tau=0.0, lag=4 / 16.0, minutes=10)
+    x = ds[var].data.copy()
+    x[1000] = np.nan
+    ds = ds.assign({var: ("time", x)})
+    window = 80
+    out = tc.find_lags(ds, window=window)
+
+    start = np.arange(out.sizes["segment"]) * (window // 2)
+    hit = (start <= 1000) & (1000 < start + window)
+    assert hit.sum() == 2
+    assert np.isnan(out.lag.data[hit]).all()
+    clean = out.lag.data[~hit]
+    assert np.isfinite(clean).all()
+    assert float(np.median(clean)) == pytest.approx(4 / 16.0, abs=1 / 16.0)
 
 
 def _clean_signal(ds):
@@ -932,3 +978,11 @@ def test_thermal_mass_profile_scales_the_output_of_a_unit_product_recursion():
     expected = ds.c.data + np.interp(ds.p.data, prof["p"], prof["product"]) * (unit.c.data - ds.c.data)
     out = tc.thermal_mass_correction(ds, beta=beta, profile=prof)
     np.testing.assert_allclose(out.c.data, expected, rtol=0, atol=1e-12)
+
+
+def test_downup_separation_default_pmin_is_tcfit_lower_bound():
+    ds, casts, tbins = make_downup_pair(offset_up=0.01)
+    pmin = tc.add_tcfit_default(ds.copy()).attrs["tcfit"][0]
+    default = tc.downup_separation(ds, casts, tbins)
+    explicit = tc.downup_separation(ds, casts, tbins, pmin=pmin)
+    assert default.attrs["mean"] == explicit.attrs["mean"]
