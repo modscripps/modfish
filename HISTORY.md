@@ -88,6 +88,15 @@
     can now come out negative.
 
 ### Bug fixes
+-   `tc.find_lags` returned the edge lag (+4.875 s at 16 Hz with
+    `window=80`) for every window when `t` or `c` held a single NaN:
+    `filtfilt` spread the NaN over the whole record. NaN are now filled
+    before the low-pass, and only windows holding one get a NaN lag.
+-   `tc.phase_correct` raises a `ValueError` naming the problem when no
+    sample lies inside `tcfit`, or when the fit range or the span deeper
+    than 1 dbar holds fewer than 2 segments of `N` samples. It used to
+    fail with `IndexError`, a LAPACK error or `ZeroDivisionError`. A
+    2-segment record is corrected when `return_spectra` is False.
 -   `utils.nsqfcn` (and so `io.add_n2`) returned all-NaN N^2 for
     profiles spaced between `dp/2` and `dp` (e.g. 6 dbar data with the
     default `dp=10`): the two-point Hanning window is all zeros. Such
@@ -258,8 +267,23 @@
     gap-fill behavior, and no-op defaults on `tc.correct`. `make_l1`'s docstring
     now states that `t`/`c` carry a `processing` attr and that the
     default `FCTDConfig()` applies no correction.
+-   `tc.thermal_mass_correction` Notes: the coefficients in the code equal
+    the SBE Data Processing manual's (0.029867 both at 16 Hz). Only
+    `dc/dT` differs, which `dcdt` selects. The table of published values
+    now quotes Lueck & Picklo (1990) correctly (`1/beta` 10 s, `alpha`
+    0.028 at 0.85 m/s and 0.020 to 0.025 at 1.7 to 1.9 m/s) and drops an
+    unsourced row.
+-   `tc.atanfit` weights by coherence to the eighth power (as the MATLAB
+    original does), not the fourth. `phase_correct`'s `tcfit` is
+    `[lower, upper]`. The conductivity spectrum in `plot_spectra` is
+    labeled in (S/m)^2/Hz. `tc.correct`, `response_correction` and
+    `thermal_mass_correction` accept time gaps, which their parameter
+    text denied. Pointers to a private processing repository are
+    replaced by the values they referred to.
 
 ### Internal Changes
+-   `tc.downup_separation` takes its default `pmin` from
+    `_fit_range_default`, shared with the other estimators.
 -   Removed the unused and partly broken `io.load_epsi_profile`,
     `load_epsi_raw`, `load_epsi_raw_mat`, `load_epsi_ctd_raw` (it returned
     the Epsi stream, not the CTD) and `plot_epsi_profile` (undefined
