@@ -190,3 +190,16 @@ def test_nan_n2_is_not_flagged_as_inverted(table):
     assert out.flag.values[0] == 0
     assert np.isnan(out.chi_pe.values[0]) and np.isnan(out.eps_chi.values[0])
     assert out.flag.values[1] & FLAG_N2
+
+
+def test_n2_flag_only_on_windows_with_an_estimate(table):
+    """Like `FLAG_RRHO`, `FLAG_N2` marks windows whose closure failed, not
+    windows that never had a chi (slow, band empty, no environment)."""
+    ctd = _ctd(tz=+0.05)
+    centers = ctd.time.values[16 * 60 : 16 * 240 : 16 * 10]
+    strat = stratification(ctd, centers, P)
+    chi = np.full(centers.size, 6e-11)
+    chi[:3] = np.nan
+    out = closure(chi, np.full(centers.size, 12.5), strat, P, table)
+    assert np.all(out.flag.values[:3] & FLAG_N2 == 0)
+    assert np.all(out.flag.values[3:] & FLAG_N2)

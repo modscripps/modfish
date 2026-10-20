@@ -19,6 +19,7 @@ from scipy.signal import welch
 from modfish.chi.config import ChiParams
 from modfish.chi.response import derivative
 from modfish.chi.spectra import correct_spectrum
+from modfish.utils import sampling_interval
 
 logger = logging.getLogger(__name__)
 
@@ -110,17 +111,21 @@ def fit_gain_casts(ctd, c1, ranges: pd.DataFrame, casts, params: ChiParams, band
     pandas.DataFrame
         Columns `cast`, `gain`, `spd`, `n_ctd`, `n_c1`; one row per down
         cast that yielded a fit. A cast is skipped (and, past the
-        non-down and not-covered cases, a warning is logged) when: its
-        `direction` is not "down"; no single range in `ranges` covers its
+        non-down, too-short and not-covered cases, a warning is logged)
+        when: its `direction` is not "down"; it holds fewer than 10 s of
+        CTD samples; no single range in `ranges` covers its
         span; the CTD `c` values over the cast span or the selected `c1`
         segment contain a NaN; or `fit_gain` raises because fewer than 3
         wavenumber bins fall inside `band`.
     """
     rows = []
     t_ctd = ctd["time"].values.astype("datetime64[ns]")
-    fs_ctd = 1.0 / (np.median(np.diff(t_ctd)).astype("int64") / 1e9)
+    # span-based rate: the median step of 1 ms-quantized 16 Hz stamps reads
+    # 62 ms and biases the gain high
+    fs_ctd = 1.0 / sampling_interval(t_ctd)
     for cid, t0, t1, direction in zip(casts["cast"].values, casts["start_time"].values,
-                                      casts["end_time"].values, casts["direction"].values):
+                                      casts["end_time"].values, casts["direction"].values,
+                                      strict=True):
         if str(direction) != "down":
             continue
         m = (t_ctd >= t0) & (t_ctd <= t1)

@@ -131,7 +131,45 @@ def test_record_floor_pools_only_the_largest_frequency_grid():
     dep_big = rng.uniform(0, 100, size=1200)
     P_small = rng.uniform(1e-10, 2e-10, size=(50, f_small.size))
     P_big = rng.uniform(1e-10, 2e-10, size=(1200, f_big.size))
-    diag = [(P_small, dep_small, f_small), (P_big, dep_big, f_big)]
-    _, n, flat = _record_floor(diag, nu)
+    diag = [(P_small, dep_small, f_small, nu), (P_big, dep_big, f_big, nu)]
+    _, n, flat = _record_floor(diag)
     assert np.all(np.isfinite(n))
     assert np.isfinite(flat)
+
+
+def test_record_floor_uses_the_current_welch_dof():
+    """With nsec = 0.25 s the window spectra have nu = 27, not the shipped
+    floor's 11. Inverting the chi-square quantile with the wrong nu puts
+    the floor estimate about 1.4x high."""
+    from modfish.chi.spectra import welch_dof, window_spectrum
+
+    fs, window, nsec, level = 325.52, 2.0, 0.25, 1e-9
+    rng = np.random.default_rng(2)
+    nw = int(round(window * fs))
+    sigma = np.sqrt(level * fs / 2)
+    spectra = [window_spectrum(rng.normal(0.0, sigma, nw), fs, nsec) for _ in range(1500)]
+    f = spectra[0][0]
+    P = np.array([s[1] for s in spectra])
+    dep = rng.uniform(0, 100, size=P.shape[0])
+    diag = [(P, dep, f, welch_dof(fs, window, nsec))]
+    _, n, _ = _record_floor(diag)
+    # 4 Hz is the first bin above DC at 0.25 s segments, where the
+    # per-segment detrend removes power; check 10, 20 and 37.5 Hz
+    assert np.all(n[1:] == pytest.approx(level, rel=0.15))
+    # the shipped floor's nu in place of the spectra's own would read high
+    _, n_wrong, _ = _record_floor([(P, dep, f, 11.04)])
+    assert np.all(n_wrong[1:] > 1.25 * level)
+
+
+def test_chi_group_carries_window_direction(l1_and_files):
+    """Each window carries the direction of the cast it falls in, so upcast
+    windows (sensor likely in the wake) can be told apart without a join."""
+    l1, files = l1_and_files
+    chi = add_chi(l1, files, ChiParams(enabled=True, gain=50.0))["chi"].to_dataset()
+    casts = l1["casts"].to_dataset()
+    assert "direction" in chi
+    assert set(np.unique(chi.direction.values.astype(str))) <= {"down", "up", "none"}
+    assert np.all(chi.direction.values[chi.cast.values == 0] == "none")
+    for cid, d in zip(casts.cast.values, casts.direction.values, strict=True):
+        assert np.all(chi.direction.values[chi.cast.values == cid] == d)
+    assert {"down", "up"} <= set(np.unique(chi.direction.values.astype(str)))

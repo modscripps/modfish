@@ -11,8 +11,25 @@ from modfish.chi.config import FLAG_N2, FLAG_RCLIP, FLAG_RRHO, ChiParams
 from modfish.utils import sampling_interval
 
 
-def _at(centers_ns, time_ns, values):
-    return np.interp(centers_ns, time_ns, values, left=np.nan, right=np.nan)
+def _interp_at(centers_ns, time_ns, values):
+    """Linear interpolation of one CTD variable onto window centers.
+
+    Parameters
+    ----------
+    centers_ns : numpy.ndarray of int64
+        Window center times, nanoseconds since the epoch.
+    time_ns : numpy.ndarray of int64
+        CTD timestamps, nanoseconds since the epoch, increasing.
+    values : array_like
+        CTD variable, same length as `time_ns`.
+
+    Returns
+    -------
+    numpy.ndarray of float
+        `values` linearly interpolated at `centers_ns`. NaN outside the
+        span of `time_ns`.
+    """
+    return np.interp(centers_ns, time_ns, np.asarray(values, dtype=float), left=np.nan, right=np.nan)
 
 
 def stratification(ctd: xr.Dataset, centers, params: ChiParams) -> xr.Dataset:
@@ -72,16 +89,16 @@ def stratification(ctd: xr.Dataset, centers, params: ChiParams) -> xr.Dataset:
     small = np.abs(dp) < 1e-6
     n2[small] = Tz[small] = Sz[small] = np.nan
 
-    p_c = _at(centers_ns, time_ns, ps)
-    t_c = _at(centers_ns, time_ns, ts)
-    SP_c = _at(centers_ns, time_ns, SPs)
-    lon_c = _at(centers_ns, time_ns, ctd["lon"].values.astype(float))
-    lat_c = _at(centers_ns, time_ns, ctd["lat"].values.astype(float))
+    p_c = _interp_at(centers_ns, time_ns, ps)
+    t_c = _interp_at(centers_ns, time_ns, ts)
+    SP_c = _interp_at(centers_ns, time_ns, SPs)
+    lon_c = _interp_at(centers_ns, time_ns, ctd["lon"].values.astype(float))
+    lat_c = _interp_at(centers_ns, time_ns, ctd["lat"].values.astype(float))
     SA = gsw.SA_from_SP(SP_c, p_c, lon_c, lat_c)
     CT = gsw.CT_from_t(SA, t_c, p_c)
     alpha = gsw.alpha(SA, CT, p_c)
     beta = gsw.beta(SA, CT, p_c)
-    Tz_c, Sz_c, n2_c = (_at(centers_ns, time_ns, v) for v in (Tz, Sz, n2))
+    Tz_c, Sz_c, n2_c = (_interp_at(centers_ns, time_ns, v) for v in (Tz, Sz, n2))
     with np.errstate(divide="ignore", invalid="ignore"):
         Rrho = alpha * Tz_c / (beta * Sz_c)
     out = xr.Dataset(
@@ -185,7 +202,7 @@ def closure(chi, kmax, strat: xr.Dataset, params: ChiParams, table: FractionTabl
         hit an edge of the eps table: below it `r` is held at the
         table's own floor value and `eps_chi` at the eps floor; above it
         `eps_chi`, `r` and `chi_tot` are NaN. `FLAG_N2` marks a finite
-        `n2 <= 0`, undefined closure; a NaN `n2` gives NaN outputs
+        `n2 <= 0` under a finite `chi`, undefined closure; a NaN `n2` gives NaN outputs
         without this bit (`chi_dataset` marks it `FLAG_NOENV`). `FLAG_RRHO` marks a capped
         `(1 + 1/Rrho^2)` factor (Rrho = 0 or the factor above
         `rrho_factor_max`); a NaN `Rrho` instead propagates as NaN
@@ -215,7 +232,7 @@ def closure(chi, kmax, strat: xr.Dataset, params: ChiParams, table: FractionTabl
     # only a measured, non-positive n2 is inverted stratification; a NaN n2
     # is missing environment and stays for chi_dataset's FLAG_NOENV
     bad_n2 = np.isfinite(n2) & (n2 <= 0)
-    flag[bad_n2] |= FLAG_N2
+    flag[bad_n2 & np.isfinite(chi)] |= FLAG_N2
     with np.errstate(divide="ignore", invalid="ignore"):
         chi_pe = (params.g * alpha) ** 2 * chi / n2 * factor
     chi_pe[bad_n2] = np.nan
