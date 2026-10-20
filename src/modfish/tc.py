@@ -738,7 +738,10 @@ def plot_spectra(spectra):
     ax : numpy.ndarray
         Array of the four matplotlib axes.
     """
-    import matplotlib.pyplot as plt
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError as exc:
+        raise ImportError("plot_spectra needs matplotlib: pip install 'modfish[plot]'") from exc
 
     f = spectra.f.data
     dof = spectra.attrs["dof"]

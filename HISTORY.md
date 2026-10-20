@@ -88,6 +88,27 @@
     can now come out negative.
 
 ### Bug fixes
+-   `utils.nsqfcn` (and so `io.add_n2`) returned all-NaN N^2 for
+    profiles spaced between `dp/2` and `dp` (e.g. 6 dbar data with the
+    default `dp=10`): the two-point Hanning window is all zeros. Such
+    data are now used unsmoothed, as gvpy does since its 2b4bf2a.
+-   `utils.datetime_linspace` returned a constant array for datetime64[ns]
+    input, the unit `mattime_to_datetime64` returns. The fast-time
+    fallback in `io.load_fctd_raw_mat` therefore stamped every
+    microconductivity sample with the first time.
+-   `utils.loadmat` raised `IndexError` on any top-level 2-D numeric
+    variable (its struct check indexed `range(size)` along the first
+    axis), e.g. a stacked `uConductivity` matrix.
+-   `io.load_fctd_raw_time_series` dropped the file holding `start` and
+    returned data past `end`. It now returns exactly `[start, end]`.
+-   Along-track `dist` in the grid loaders went NaN after the first
+    missing position. Missing positions are interpolated first.
+-   Grid loader metadata: `SA` is g/kg (was kg/m^3), `sgth` is labeled
+    sigma_0, and Epsifish `th` is potential temperature (was labeled
+    Theta, the symbol for conservative temperature).
+-   `io.load_fctd_grid(what=...)` raises on an unknown value instead of
+    returning the full grid. `utils.mattime_to_datetime64` accepts a
+    pandas Series.
 -   `modraw.read` no longer loses a whole file to one bad stream. A record
     timestamp past the datetime64[ns] range (one flipped high hex digit)
     raised `OverflowError`; such records are now dropped and counted in
@@ -239,6 +260,12 @@
     default `FCTDConfig()` applies no correction.
 
 ### Internal Changes
+-   Removed the unused and partly broken `io.load_epsi_profile`,
+    `load_epsi_raw`, `load_epsi_raw_mat`, `load_epsi_ctd_raw` (it returned
+    the Epsi stream, not the CTD) and `plot_epsi_profile` (undefined
+    `gv`), plus `utils.process_file_path` and `loadmat(onevar=...)`.
+-   matplotlib is an optional extra, `modfish[plot]`, used only by
+    `tc.plot_spectra`.
 -   Removed `modraw.load_ctd`, `load_ctd_time_series`, `load_gps_time`,
     `block_counts` and `header.read_body`. They framed only the bytes past
     the declared header and so returned less data than `modraw.read`, the

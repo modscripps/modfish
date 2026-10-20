@@ -51,7 +51,7 @@ def nsqfcn(s, t, p, p0, dp, lon, lat):
     1. drops samples with negative pressure or NaN in `s` or `t`, and
        flips an upward profile,
     2. low-pass filters `t`, `s` and `p` with a Hanning window of width
-       `dp`,
+       `dp` (skipped when the data are spaced more than `dp/2` apart),
     3. interpolates `t` and `s` onto `p0, p0 + dp, p0 + 2 dp, ...`,
     4. computes the potential density of the upper and lower point of
        each grid interval, referenced to the pressure halfway between
@@ -91,12 +91,14 @@ def nsqfcn(s, t, p, p0, dp, lon, lat):
     if p[-1] < p[0]:
         s, t, p = s[::-1], t[::-1], p[::-1]
 
-    # Low pass over dp. A window of one sample or less means no filtering.
+    # Low pass over dp. A window shorter than 4 points means no filtering:
+    # np.hanning(2) is all zeros, and normalizing it gave NaN everywhere for
+    # data spaced between dp/2 and dp, which is already coarser than dp/2.
     dp_med = np.median(np.diff(p))
     if not dp_med > 0:
         return np.nan, np.nan
     nwin = int(2 * np.floor(dp / dp_med))
-    if nwin > 1:
+    if nwin >= 4:
         if p.size <= 3 * nwin:  # filtfilt's default padlen
             return np.nan, np.nan
         b = np.hanning(nwin)
@@ -257,24 +259,22 @@ def mattime_to_datetime64(dnum):
 
     Parameters
     ----------
-    dtnum : array-like
-        Time in Matlab datenum format.
+    dnum : float or array_like
+        Time in Matlab datenum format, days.
 
     Returns
     -------
-    time : np.datetime64
-        Time in numpy datetime64 format
+    numpy.datetime64 or numpy.ndarray of datetime64[ns]
+        A scalar for scalar input, an array otherwise.
 
     Notes
     -----
     In Matlab, datevec(719529) = [1970 1 1 0 0 0]
     """
-    t = pd.to_datetime(dnum - 719529, unit="D")
-    if isinstance(t, pd.Timestamp):
-        time = t.to_datetime64()
-    elif isinstance(t, pd.DatetimeIndex):
-        time = t.values
-    return time
+    if np.ndim(dnum) == 0:
+        return pd.to_datetime(float(dnum) - 719529, unit="D").to_datetime64()
+    days = np.asarray(dnum, dtype=float) - 719529
+    return np.asarray(pd.to_datetime(days.ravel(), unit="D").values).reshape(days.shape)
 
 
 def datetime64_to_str(dt64, unit="D"):
@@ -301,21 +301,23 @@ def datetime64_to_str(dt64, unit="D"):
     return np.datetime_as_string(dt64, unit=unit).replace("T", " ")
 
 
-def loadmat(filename, onevar=False, verbose=False):
+def loadmat(filename, verbose=False):
     """
     Load Matlab .mat files and return as dictionary with .dot-access.
 
     Parameters
     ----------
-    filename : str
-        Path to .mat file
-    onevar : bool
-        Set to true if there is only one variable in the mat file.
+    filename : str or pathlib.Path
+        Path to .mat file.
+    verbose : bool, optional
+        Print a note when the file holds a single variable. Default False.
 
     Returns
     -------
-    out : dict (Munch)
-        Data in a munchified dictionary.
+    out : munch.Munch
+        With one variable in the file, that variable (structs become
+        nested Munch objects); otherwise a Munch of every variable, keyed
+        by name, without the `__header__`-style entries.
     """
 
     def _check_keys(dict):
@@ -324,14 +326,15 @@ def loadmat(filename, onevar=False, verbose=False):
         todict is called to change them to nested dictionaries
         """
         for key in dict:
-            ni = np.size(dict[key])
-            if ni <= 1:
-                if isinstance(dict[key], scipy.io.matlab.mat_struct):
-                    dict[key] = _todict(dict[key])
-            else:
-                for i in range(0, ni):
-                    if isinstance(dict[key][i], scipy.io.matlab.mat_struct):
-                        dict[key][i] = _todict(dict[key][i])
+            value = dict[key]
+            if isinstance(value, scipy.io.matlab.mat_struct):
+                dict[key] = _todict(value)
+            elif isinstance(value, np.ndarray) and value.dtype == object:
+                # struct arrays and cell arrays; numeric arrays of any
+                # shape hold no structs
+                for i, item in enumerate(value.flat):
+                    if isinstance(item, scipy.io.matlab.mat_struct):
+                        value.flat[i] = _todict(item)
         return dict
 
     def _todict(matobj):
@@ -352,94 +355,31 @@ def loadmat(filename, onevar=False, verbose=False):
 
     # Check if there is only one variable in the dataset. If so, directly
     # return only this variable as munchified dataset.
-    if not onevar:
-        dk = list(out.keys())
-        actual_keys = [k for k in dk if k[:2] != "__"]
-        if len(actual_keys) == 1:
-            if verbose:
-                print("found only one variable, returning munchified data structure")
-            return munchify(out[actual_keys[0]])
-        else:
-            out2 = {}
-            for k in actual_keys:
-                out2[k] = out[k]
-            return munchify(out2)
-
-    # for legacy, keep the option in here as well.
-    if onevar:
-        # let's check if there is only one variable in there and return it
-        kk = list(out.keys())
-        outvars = []
-        for k in kk:
-            if k[:2] != "__":
-                outvars.append(k)
-        if len(outvars) == 1:
-            if verbose:
-                print("returning munchified data structure")
-            return munchify(out[outvars[0]])
-        else:
-            if verbose:
-                print("found more than one var...")
-            return out
-    else:
-        return out
+    actual_keys = [k for k in out if k[:2] != "__"]
+    if len(actual_keys) == 1:
+        if verbose:
+            print("found only one variable, returning munchified data structure")
+        return munchify(out[actual_keys[0]])
+    return munchify({k: out[k] for k in actual_keys})
 
 
 def parse_filename_datetime(file):
-    yy, mm, dd, time = file.stem[4:].split("_")
-    dtstr = f"20{yy}-{mm}-{dd} {time[:2]}:{time[2:4]}:{time[4:6]}"
-    return np.datetime64(dtstr)
-
-
-def process_file_path(path_input):
-    """
-    Validate and convert a file path input to a pathlib.Path object.
-
-    This function accepts either a string representing a path or an existing
-    pathlib.Path object. If a string is provided, it is converted to a Path
-    object.
+    """Start time encoded in a MOD data file name.
 
     Parameters
     ----------
-    path_input : {pathlib.Path, str}
-        The file path input, which can be an absolute or relative path string,
-        or an existing Path object.
+    file : pathlib.Path
+        A file named `<4-character prefix>YY_MM_DD_hhmmss.<ext>`, e.g.
+        `FCTD25_12_08_134303.mat`. The year is taken as 20YY.
 
     Returns
     -------
-    pathlib.Path
-        The guaranteed Path object.
-
-    Raises
-    ------
-    TypeError
-        If the input is neither a pathlib.Path object nor a string (str).
-
-    Examples
-    --------
-    >>> from pathlib import Path
-    >>> # Input is a string
-    >>> process_file_path('/home/data/file.txt')
-    Path('/home/data/file.txt')
-
-    >>> # Input is already a Path object
-    >>> p = Path('temp.csv')
-    >>> process_file_path(p)
-    Path('temp.csv')
+    numpy.datetime64
+        The start time, s resolution.
     """
-    if isinstance(path_input, Path):
-        file_path = path_input
-
-    elif isinstance(path_input, str):
-        file_path = Path(path_input)
-
-    else:
-        raise TypeError(
-            f"Input must be a pathlib.Path object or a string (str), "
-            f"not {type(path_input).__name__}"
-        )
-
-    return file_path
+    yy, mm, dd, time = file.stem[4:].split("_")
+    dtstr = f"20{yy}-{mm}-{dd} {time[:2]}:{time[2:4]}:{time[4:6]}"
+    return np.datetime64(dtstr)
 
 
 def datetime_linspace(start_time, end_time, n_points):
@@ -483,25 +423,11 @@ def datetime_linspace(start_time, end_time, n_points):
     if n_points < 2:
         raise ValueError("n_points must be 2 or greater for linspace.")
 
-    # Calculate the total duration
-    total_duration = end_time - start_time
-
-    # Extract the base unit (e.g., 's', 'ms', 'ns') and convert to an integer
-    # This gets the magnitude of the timedelta in its finest resolution.
-    duration_as_int = total_duration.astype(np.int64)
-
-    # Generate n linearly spaced integers from 0 to the total duration magnitude
-    # This represents the step size in the time unit
-    step_magnitudes = np.linspace(0, duration_as_int, n_points, dtype=np.int64)
-
-    # Convert the integer magnitudes back to timedelta64 objects
-    # We create a scalar timedelta of 1 unit and multiply the vector
-    # This automatically retains the original time unit of the duration.
-    one_unit_timedelta = total_duration.astype('timedelta64[us]') / duration_as_int
-    time_deltas = step_magnitudes * one_unit_timedelta
-
-    # Add the time deltas to the start time
-    datetime_vector = start_time + time_deltas
+    # integer steps in the inputs' own unit; casting the step to a coarser
+    # unit first truncated it to zero for ns input
+    total = end_time - start_time
+    steps = np.linspace(0, total.astype(np.int64), n_points).round().astype(np.int64)
+    datetime_vector = start_time + steps.astype(total.dtype)
 
     return datetime_vector
 
