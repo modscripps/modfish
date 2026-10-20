@@ -24,7 +24,6 @@ classifiers = [
 requires-python = ">= 3.10"
 dependencies = [
     "munch>=4.0.0",
-    "matplotlib>=3.1",
     "gsw>=3.6",
     "numpy>=2.1",
     "scipy>=1.12",
@@ -33,6 +32,10 @@ dependencies = [
     "netcdf4>=1.7",
     "pyyaml>=6.0.3",
 ]
+
+[project.optional-dependencies]
+# tc.plot_spectra
+plot = ["matplotlib>=3.1"]
 
 [project.urls]
 # Homepage = "https://example.com"
@@ -58,6 +61,7 @@ markers = [
 [dependency-groups]
 dev = [
     "ipython>=8.37.0",
+    "matplotlib>=3.1",
     "pdoc>=15.0.4",
     "pytest>=8.4.2",
     "ruff>=0.14.0",

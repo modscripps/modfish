@@ -10,7 +10,29 @@ import modfish
 
 
 def test_mattime_to_datetime64():
-    pass
+    import pandas as pd
+
+    # Matlab datenum 719529 is 1970-01-01
+    assert modfish.utils.mattime_to_datetime64(719529.5) == np.datetime64("1970-01-01T12:00")
+    arr = modfish.utils.mattime_to_datetime64(np.array([719529.0, 719530.0]))
+    np.testing.assert_array_equal(arr, np.array(["1970-01-01", "1970-01-02"], dtype="datetime64[ns]"))
+    # a pandas Series is neither a Timestamp nor a DatetimeIndex
+    ser = modfish.utils.mattime_to_datetime64(pd.Series([719529.0, 719530.0]))
+    np.testing.assert_array_equal(ser, arr)
+
+
+def test_datetime_linspace_nanoseconds():
+    """`mattime_to_datetime64` returns ns. The step was cast to us and then
+    divided by a ns count, so it truncated to zero and every point equaled
+    the start."""
+    start = np.datetime64("2025-12-06T00:00:00", "ns")
+    end = start + np.timedelta64(10, "s")
+    out = modfish.utils.datetime_linspace(start, end, 5)
+    np.testing.assert_array_equal(np.diff(out), np.full(4, np.timedelta64(2500, "ms")))
+    assert out[-1] == end and out.dtype == start.dtype
+    sec = modfish.utils.datetime_linspace(np.datetime64("2025-01-01T10:00:00"),
+                                          np.datetime64("2025-01-01T10:06:00"), 4)
+    assert sec[1] == np.datetime64("2025-01-01T10:02:00")
 
 
 def _quantized_time(fs=16.0, seconds=600, quantum_ms=1):

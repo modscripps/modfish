@@ -1,202 +1,50 @@
-#!/usr/bin/env python
-# coding: utf-8
 """
-I/O functions mostly for reading .mat files produced from FastCTD and Epsifish observations.
+Readers for the .mat files the MOD Matlab processing writes for FastCTD and
+Epsifish: Epsifish gridded profiles, FastCTD per-file raw time series and
+FastCTD grids.
 """
 
 import re
 from pathlib import Path
+
 import gsw
 import numpy as np
-import scipy
 import xarray as xr
 
 import modfish
 
 
-def load_epsi_profile(name):
-    """Load one epsi profile.
-
-    Parameters
-    ----------
-    name : Path or str
-        File path or name.
-
-    Returns
-    -------
-    ds : xr.Dataset
-        Data structure with basic variables.
-
-    Notes
-    -----
-    Note that there are also `load_epsi_raw` and `load_epsi_ctd_raw` for
-    reading raw time series.
-    """
-    epsi = scipy.io.loadmat(name)
-    epsi = epsi["Profile"][0, 0]
-
-    depth = epsi["z"].squeeze()
-    dnum = epsi["dnum"].squeeze()
-    eps_co1 = epsi["epsilon_co"].squeeze()[:, 0]
-    eps_co2 = epsi["epsilon_co"].squeeze()[:, 1]
-    chi1 = epsi["chi"].squeeze()[:, 0]
-    chi2 = epsi["chi"].squeeze()[:, 1]
-
-    prof = xr.Dataset(
-        data_vars=dict(
-            time=(("depth"), modfish.utils.mattime_to_datetime64(dnum)),
-            eps_co1=(("depth"), eps_co1),
-            eps_co2=(("depth"), eps_co2),
-            chi1=(("depth"), chi1),
-            chi2=(("depth"), chi2),
-        ),
-        coords=dict(depth=(("depth"), depth)),
-    )
-    for v in [
-        "w",
-        "t",
-        "s",
-        "th",
-        "pr",
-        "sgth",
-        "pitch",
-        "roll",
-        "kvis",
-        "epsilon_final",
-    ]:
-        prof[v] = (("depth"), epsi[v].squeeze())
-
-    prof = prof.rename(dict(roll="rol", epsilon_final="eps_final"))
-
-    start_dnum = dnum[~np.isnan(dnum)]
-    start_time = modfish.utils.mattime_to_datetime64(np.nanmean(start_dnum[:10]))
-    prof.attrs["start_time"] = modfish.utils.datetime64_to_str(start_time, unit="m")
-    prof.attrs["lon"] = epsi["longitude"].squeeze()
-    prof.attrs["lat"] = epsi["latitude"].squeeze()
-    prof.attrs["profile number"] = epsi["profNum"].squeeze()
-    # prof = prof.where(~np.isnan(prof.depth), drop=True)
-    # new_depth= np.arange(0, 1000.5, 0.5)
-    # profi = prof.interp(depth=new_depth)
-    return prof
-
-
-def load_epsi_raw(name):
-    """Load raw time series for one epsi profile.
-
-    Parameters
-    ----------
-    name : Path or str
-        File path or name.
-
-    Returns
-    -------
-    ds : xr.Dataset
-        Data structure with basic variables.
-    """
-    epsi = scipy.io.loadmat(name)
-    epsi = epsi["Profile"][0, 0]
-    epsi_raw = epsi["epsi"][0][0]
-    dnum = epsi_raw["dnum"].squeeze()
-    raw = xr.Dataset(
-        data_vars=dict(time_s=epsi_raw["time_s"].squeeze()),
-        coords=dict(
-            time=(("time"), modfish.utils.mattime_to_datetime64(dnum)),
-        ),
-    )
-    for k in epsi_raw.dtype.names:
-        raw[k] = (("time"), epsi_raw[k].squeeze())
-    return raw
-
-
-def load_epsi_raw_mat(file):
-    d = scipy.io.loadmat(file)
-    epsi = d["epsi"][0, 0]
-    dnum = epsi["dnum"].squeeze()
-    time = modfish.utils.mattime_to_datetime64(dnum)
-    ds = xr.Dataset(
-        coords=dict(
-            time=(("time"), time),
-        ),
-        data_vars=dict(
-            s1_volt=(("time"), epsi["s1_volt"].squeeze()),
-            s2_volt=(("time"), epsi["s2_volt"].squeeze()),
-        ),
-    )
-
-    ctd = d["ctd"][0, 0]
-    dnum = ctd["dnum"].squeeze()
-    time = modfish.utils.mattime_to_datetime64(dnum)
-    cds = xr.Dataset(
-        coords=dict(
-            time=(("time"), time),
-        ),
-        data_vars=dict(
-            t=(("time"), ctd["T"].squeeze()),
-            s=(("time"), ctd["S"].squeeze()),
-            c=(("time"), ctd["C"].squeeze()),
-            p=(("time"), ctd["P"].squeeze()),
-            dzdt=(("time"), ctd["dzdt"].squeeze()),
-        ),
-    )
-    # time = modfish.utils.mattime_to_datetime64(d.ctd.dnum)
-    # ctd = xr.Dataset(
-    #     coords=dict(
-    #         time=(("time"), time),
-    #     ),
-    #     data_vars=dict(
-    #         p=(("time"), d.ctd.P),
-    #         t=(("time"), d.ctd.T),
-    #         c=(("time"), d.ctd.C),
-    #         s=(("time"), d.ctd.S),
-    #     ),
-    # )
-    ds["p"] = (("time"), cds.p.interp_like(ds).data)
-    ds["t"] = (("time"), cds.t.interp_like(ds).data)
-    ds["c"] = (("time"), cds.c.interp_like(ds).data)
-    ds["s"] = (("time"), cds.s.interp_like(ds).data)
-    ds["dzdt"] = (("time"), cds.dzdt.interp_like(ds).data)
+def _add_teos(ds):
+    """Add TEOS-10 `SA`, `CT` and `sgth` (sigma_0) from `s`, `t`, `p`, `lon`, `lat`."""
+    ds["SA"] = gsw.SA_from_SP(ds.s, ds.p, ds.lon, ds.lat)
+    ds.SA.attrs = dict(long_name="absolute salinity", units="g/kg")
+    ds["CT"] = gsw.CT_from_t(ds.SA, ds.t, ds.p)
+    ds.CT.attrs = dict(long_name="conservative temperature", units="°C")
+    ds["sgth"] = gsw.density.sigma0(ds.SA, ds.CT)
+    ds.sgth.attrs = dict(long_name=r"$\sigma_0$", units="kg/m$^3$")
     return ds
 
 
-def load_epsi_ctd_raw(name):
-    """Load raw CTD time series for one epsi profile.
+def _add_distance(ds):
+    """Add along-track distance `dist` (km) on `time` from `lon`/`lat`.
 
-    Parameters
-    ----------
-    name : Path or str
-        File path or name.
-
-    Returns
-    -------
-    ds : xr.Dataset
-        Data structure with basic variables.
+    Missing positions are filled by linear interpolation in sample index
+    first, so one NaN position does not turn every later distance NaN.
+    All NaN when fewer than two positions are finite.
     """
-    epsi = scipy.io.loadmat(name)
-    epsi = epsi["Profile"][0, 0]
-    epsi_raw = epsi["epsi"][0][0]
-    dnum = epsi_raw["dnum"].squeeze()
-    raw = xr.Dataset(
-        data_vars=dict(time_s=epsi_raw["time_s"].squeeze()),
-        coords=dict(
-            time=(("time"), modfish.utils.mattime_to_datetime64(dnum)),
-        ),
-    )
-    for k in epsi_raw.dtype.names:
-        raw[k] = (("time"), epsi_raw[k].squeeze())
-    return raw
-    epsi = scipy.io.loadmat(name)
-    epsi = epsi["Profile"][0, 0]
-    ctd_raw = epsi["ctd"][0][0]
-    dnum = ctd_raw["dnum"].squeeze()
-    raw = xr.Dataset(
-        data_vars=dict(time_s=ctd_raw["time_s"].squeeze()),
-        coords=dict(
-            time=(("time"), modfish.utils.mattime_to_datetime64(dnum)),
-        ),
-    )
-    for k in ctd_raw.dtype.names:
-        raw[k] = (("time"), ctd_raw[k].squeeze())
-    return raw
+    lon = np.asarray(ds.lon.values, dtype=float)
+    lat = np.asarray(ds.lat.values, dtype=float)
+    ok = np.isfinite(lon) & np.isfinite(lat)
+    if ok.sum() < 2:
+        dist = np.full(lon.size, np.nan)
+    else:
+        i = np.arange(lon.size)
+        lon = np.interp(i, i[ok], lon[ok])
+        lat = np.interp(i, i[ok], lat[ok])
+        dist = np.insert(np.cumsum(gsw.distance(lon, lat) / 1e3), 0, 0.0)
+    ds.coords["dist"] = (("time"), dist)
+    ds.dist.attrs = dict(long_name="distance", units="km")
+    return ds
 
 
 def load_epsi_grid(file):
@@ -207,10 +55,16 @@ def load_epsi_grid(file):
     Parameters
     ----------
     file : str or pathlib.Path
+        The Matlab grid file.
 
     Returns
     -------
     xr.Dataset
+        Dims `(depth, time)`. Data variables `t`, `th` (potential
+        temperature), `s`, `w`, `chi1`, `chi2`, `eps1`, `eps2`, `eps`,
+        `a1`-`a3` from the file, TEOS-10 `SA`, `CT`, `sgth`, and `n2`
+        (`add_n2`). Coordinates `depth`, `p`, `time`, `lon`, `lat`,
+        `profn` and the along-track `dist` (km).
     """
     grd = modfish.utils.loadmat(file)
     time = modfish.utils.mattime_to_datetime64(grd.dnum)
@@ -240,26 +94,13 @@ def load_epsi_grid(file):
         ),
     )
 
-    ds["SA"] = gsw.SA_from_SP(ds.s, ds.p, ds.lon, ds.lat)
-    ds.SA.attrs = dict(long_name="absolute salinity", units="kg/m$^3$")
-    ds["CT"] = gsw.CT_from_t(ds.SA, ds.t, ds.p)
-    ds.CT.attrs = dict(long_name="conservative temperature", units="°C")
-    ds["sgth"] = gsw.density.sigma0(ds.SA, ds.CT)
-    ds.sgth.attrs = dict(long_name=r"$\sigma_0$", units="kg/m$^3$")
-
+    ds = _add_teos(ds)
     ds.p.data = np.float64(ds.p.data)
-
     ds = add_n2(ds, dp=10)
-
-    dist = gsw.distance(ds.lon, ds.lat)
-    cdist = np.cumsum(dist)
-    cdist = np.insert(cdist, 0, 0)
-    ds.coords["dist"] = (("time"), cdist / 1e3)
-    ds.dist.attrs = dict(long_name="distance", units="km")
+    ds = _add_distance(ds)
     ds.t.attrs = dict(long_name="temperature", units="°C")
-    ds.th.attrs = dict(long_name=r"$\Theta$", units="°C")
+    ds.th.attrs = dict(long_name=r"$\theta$", units="°C")
     ds.s.attrs = dict(long_name="salinity", units="psu")
-    ds.sgth.attrs = dict(long_name=r"$\sigma_\theta$", units=r"kg/m$^3$")
     ds.eps1.attrs = dict(long_name=r"$\epsilon$", units="W/kg")
     ds.eps2.attrs = dict(long_name=r"$\epsilon$", units="W/kg")
     ds.eps.attrs = dict(long_name=r"$\epsilon$", units="W/kg")
@@ -396,73 +237,51 @@ def load_fctd_raw_time_series(fctd_mat_dir, start, end):
     Returns
     -------
     ds : xr.Dataset
-        Raw FCTD time series.
+        Raw FCTD time series, trimmed to `[start, end]`.
     mds : xr.Dataset
-        Raw FCTD microconductivity time series.
-    """
-    # We need a workaround for some of the files starting with EPSI, others
-    # with FCTD.
+        Raw FCTD microconductivity time series, trimmed to `[start, end]`.
 
-    # all_files = sorted(fctd_mat_dir.glob("EPSI*.mat"))
+    Raises
+    ------
+    ValueError
+        If no file starts before `end`.
+    """
     all_files = _find_fctd_mat_files(fctd_mat_dir)
     file_times = np.array(
         [modfish.utils.parse_filename_datetime(file) for file in all_files]
     )
-    if type(start) is str:
-        start = np.datetime64(start)
-    if type(end) is str:
-        end = np.datetime64(end)
-    ind = np.flatnonzero((file_times > start) & (file_times < end))
-    files = [all_files[i] for i in ind]
-    return fctd_mat_combine(files)
+    start = np.datetime64(start)
+    end = np.datetime64(end)
+    # files are named by their start time: the file holding `start` is the
+    # last one that starts at or before it
+    first = max(int(np.searchsorted(file_times, start, side="right")) - 1, 0)
+    last = int(np.searchsorted(file_times, end, side="left"))
+    files = all_files[first:last]
+    if not files:
+        raise ValueError(f"no fctd_mat file in {fctd_mat_dir} covers {start} to {end}")
+    ds, mds = fctd_mat_combine(files)
+    return ds.sel(time=slice(start, end)), mds.sel(time=slice(start, end))
 
 
 def _find_fctd_mat_files(data_directory):
-    """Locate data files in an fctd_mat directory.
+    """Per-file data files in an fctd_mat directory.
+
+    Some deployments name them `EPSI...`, others `FCTD...`. Products such
+    as `FCTDgrid.mat` do not match the name pattern.
 
     Parameters
     ----------
-    data_directory :
+    data_directory : str or pathlib.Path
+        The `fctd_mat` directory.
 
     Returns
     -------
-
+    list of pathlib.Path
+        Files named `(EPSI|FCTD)YY_MM_DD_hhmmss.mat`, sorted by name,
+        which is chronological.
     """
-    # Convert directory from str to pathlib.Path if necessary
-    data_directory = modfish.utils.process_file_path(data_directory)
-    # Define the flexible glob pattern.
-    # '????' matches the 4-character prefix (EPSI/FCTD)
-    # '*' matches the entire variable date/time part (YY_MM_DD_hhmmss)
-    search_pattern = '????*.mat'
-
-    # Define specific filenames to exclude
-    excluded_files = {
-        'FCTDgrid.mat',
-        'FCTDall_L0.mat',
-        'FCTDall_L1.mat',
-        'FastCTD_MATfile_TimeIndex.mat'
-    }
-
-    # Define a regex to validate the *start* of the filename after the glob is applied.
-    # This ensures only 'EPSI' or 'FCTD' files are included,
-    # preventing other 4-letter prefixes like 'TEST' from sneaking in.
-    # ^(EPSI|FCTD): Starts with 'EPSI' OR 'FCTD'
-    # \d{2}_\d{2}_\d{2}: Followed by YY_MM_DD
-    # _: Followed by an underscore
-    # \d{6}: Followed by hhmmss
-    # \.mat$: Ends with .mat
-    # The full pattern is a good way to be specific after the broad glob.
-    validation_regex = re.compile(r"^(EPSI|FCTD)\d{2}_\d{2}_\d{2}_\d{6}\.mat$", re.IGNORECASE)
-
-    # Path.glob() to find and filter all matching files
-    matching_files = [
-        # Get the string representation of the path object
-        p
-        for p in data_directory.glob(search_pattern)
-        if (p.name not in excluded_files and validation_regex.match(p.name))
-    ]
-
-    return sorted(matching_files)
+    pattern = re.compile(r"^(EPSI|FCTD)\d{2}_\d{2}_\d{2}_\d{6}\.mat$", re.IGNORECASE)
+    return sorted(p for p in Path(data_directory).glob("*.mat") if pattern.match(p.name))
 
 
 def load_fctd_grid(file, what="all"):
@@ -473,21 +292,30 @@ def load_fctd_grid(file, what="all"):
     Parameters
     ----------
     file : str or pathlib.Path
+        The Matlab grid file.
+    what : {"all", "down", "dn", "up"}, optional
+        Which grid to read: all casts (`FCTDgrid`, default), downcasts
+        (`FCTDdown`) or upcasts (`FCTDup`).
 
     Returns
     -------
     xr.Dataset
+        Dims `(depth, time)`. Data variables `t`, `c`, `s`, `density`, `p`
+        and whichever of `drop`, `altDist`, `w`, `bb`, `chla`, `chi`, `chi2`
+        the file has, TEOS-10 `SA`, `CT`, `sgth`, and `n2` (`add_n2`).
+        Coordinates `depth`, `time`, per-profile mean `lon`/`lat`, the
+        full `longitude_full`/`latitude_full`, and along-track `dist` (km).
+        All-NaN depth rows and NaT times are dropped.
+
+    Raises
+    ------
+    ValueError
+        If `what` is not one of the values above.
     """
-    tmp = modfish.utils.loadmat(file)
-    match what:
-        case "down":
-            grd = tmp["FCTDdown"]
-        case "dn":
-            grd = tmp["FCTDdown"]
-        case "up":
-            grd = tmp["FCTDup"]
-        case _:
-            grd = tmp["FCTDgrid"]
+    keys = {"all": "FCTDgrid", "down": "FCTDdown", "dn": "FCTDdown", "up": "FCTDup"}
+    if what not in keys:
+        raise ValueError(f"what must be one of {sorted(keys)}, got {what!r}")
+    grd = modfish.utils.loadmat(file)[keys[what]]
     time = modfish.utils.mattime_to_datetime64(grd.time)
     ds = xr.Dataset(
         coords=dict(
@@ -510,13 +338,7 @@ def load_fctd_grid(file, what="all"):
         if var in grd.keys():
             ds[var] = (("depth", "time"), grd[var])
 
-    ds["SA"] = gsw.SA_from_SP(ds.s, ds.p, ds.lon, ds.lat)
-    ds.SA.attrs = dict(long_name="absolute salinity", units="kg/m$^3$")
-    ds["CT"] = gsw.CT_from_t(ds.SA, ds.t, ds.p)
-    ds.CT.attrs = dict(long_name="conservative temperature", units="°C")
-    ds["sgth"] = gsw.density.sigma0(ds.SA, ds.CT)
-    ds.sgth.attrs = dict(long_name=r"$\sigma_0$", units="kg/m$^3$")
-
+    ds = _add_teos(ds)
     ds = ds.dropna("depth", how="all")
     mask = ~np.isnat(ds.time)
     ds = ds.sel(time=mask)
@@ -530,45 +352,7 @@ def load_fctd_grid(file, what="all"):
     ds.t.attrs = dict(long_name="temperature", units="°C")
     ds.s.attrs = dict(long_name="salinity", units="psu")
     ds.depth.attrs = dict(long_name="depth", units="m")
-    dist = gsw.distance(ds.lon.data, ds.lat.data) / 1e3
-    dist = np.insert(np.cumsum(dist), 0, 0)
-    ds.coords["dist"] = (("time"), dist)
-    ds.dist.attrs = dict(long_name="distance", units="km")
-    return ds
-
-
-def plot_epsi_profile(prof):
-    start_str = prof.start_time.replace("T", " ")
-    opts = dict(linewidth=1)
-    fig, ax = gv.plot.quickfig(c=6, sharey=True, grid=True, fgs=(12, 5))
-    ax[0].plot(prof.eps_co1, prof.depth, color="C0", **opts)
-    ax[0].plot(prof.eps_co2, prof.depth, color="C6", **opts)
-    ax[0].set(
-        xscale="log",
-        xlim=[1e-11, 1e-6],
-        ylabel="depth [m]",
-        xlabel="$\\mathrm{log}_{10}(\\epsilon)$ [W/kg]",
-        title=f"profile {prof.attrs['profile number']:03d}",
-    )
-    ax[1].plot(prof.chi1, prof.depth, color="C0", **opts)
-    ax[1].plot(prof.chi2, prof.depth, color="C6", **opts)
-    ax[1].set(
-        xscale="log",
-        xlabel="$\\mathrm{log}_{10}(\\chi)$ [K$^2$/s]",
-        title=start_str,
-    )
-    ax[0].invert_yaxis()
-    ax[2].plot(prof.w, prof.depth, **opts)
-    ax[2].set(xlabel="fall rate [m/s]")
-    ax[3].plot(prof.pitch, prof.depth, color="C0", **opts)
-    ax[3].plot(prof.rol, prof.depth, color="C6", **opts)
-    gv.plot.xsym(ax[3])
-    ax[3].set(xlabel="pitch/roll [deg]")
-    ax[4].plot(prof.t, prof.depth, **opts)
-    ax[4].set(xlabel="temperature [°C]")
-    ax[5].plot(prof.s, prof.depth, **opts)
-    ax[5].set(xlabel="salinity")
-    return ax
+    return _add_distance(ds)
 
 
 def add_n2(ds, dp=10):
