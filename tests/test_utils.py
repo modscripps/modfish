@@ -185,3 +185,15 @@ def test_gap_aware_rate_is_nan_on_a_single_sample_run():
     x = np.arange(201, dtype=float)
     rate = modfish.utils.gap_aware_rate(x, t, 1.0)
     assert np.isnan(rate[100]) and np.isfinite(np.delete(rate, 100)).all()
+
+
+def test_gap_runs_splits_at_gaps_only():
+    from modfish.utils import gap_runs
+
+    t0 = np.datetime64("2025-12-06")
+    off_ms = np.r_[np.arange(10) * 62.5, 10_000 + np.arange(5) * 62.5, 10_400 + np.arange(3) * 62.5]
+    t = t0 + np.round(off_ms).astype("timedelta64[ms]")
+    runs = gap_runs(t)
+    assert [(r.start, r.stop) for r in runs] == [(0, 10), (10, 15), (15, 18)]
+    assert [(r.start, r.stop) for r in gap_runs(t[:10])] == [(0, 10)]
+    assert gap_runs(t[:1]) == [slice(0, 1)]

@@ -229,7 +229,7 @@ def crossval2025(tmp_path_factory):
         grid=GridParams(dz=0.5),
         latitude_fallback=30.0,
     )
-    ours = grid_casts(make_l1(concat_l0(l0, keep_counts=cfg.keep_counts), cfg), cfg.grid)
+    ours = grid_casts(make_l1(concat_l0(l0), cfg), cfg.grid)
     shutil.rmtree(tmp_path, ignore_errors=True)
 
     theirs = modfish.io.load_fctd_grid(MATLAB_GRID_2025)

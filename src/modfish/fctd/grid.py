@@ -22,44 +22,66 @@ from modfish.fctd.config import GridParams
 _EXCLUDE_VARS = {"lon", "lat", "depth"}
 
 
-def _depth_edges(depth: np.ndarray, params: GridParams) -> tuple[np.ndarray, np.ndarray]:
+def depth_edges(depth: np.ndarray, params: GridParams) -> tuple[np.ndarray, np.ndarray]:
     """Depth bin centers and edges for the grid.
 
     Parameters
     ----------
     depth : np.ndarray
         Per-sample depth, m, used to derive `depth_min`/`depth_max` when
-        `params` leaves either as None (floor/ceil of the 0th/100th
-        percentile, rounded to `dz`).
+        `params` leaves either as None (min/max of the finite depths,
+        rounded outward to a multiple of `dz`).
     params : GridParams
         Uses `dz`, `depth_min`, `depth_max`.
 
     Returns
     -------
     centers : np.ndarray
-        Bin center depths, m, `np.arange(depth_min, depth_max + dz, dz)`.
+        Bin center depths, m, `depth_min + dz * arange(n)` with `n` the
+        whole number of steps to `depth_max`, both ends included.
     edges : np.ndarray
         Bin edges, m, `centers +/- dz / 2`; length `len(centers) + 1`.
+
+    Raises
+    ------
+    ValueError
+        If a limit must be derived but `depth` has no finite value, or if
+        `depth_min` exceeds `depth_max`.
     """
     dz = params.dz
     depth_min = params.depth_min
     depth_max = params.depth_max
-    if depth_min is None:
-        depth_min = dz * np.floor(np.nanpercentile(depth, 0) / dz)
-    if depth_max is None:
-        depth_max = dz * np.ceil(np.nanpercentile(depth, 100) / dz)
+    if depth_min is None or depth_max is None:
+        finite = np.asarray(depth, dtype=float)
+        finite = finite[np.isfinite(finite)]
+        if finite.size == 0:
+            raise ValueError("no finite depth to derive the grid range from; "
+                             "set GridParams.depth_min and depth_max")
+        if depth_min is None:
+            depth_min = dz * np.floor(finite.min() / dz)
+        if depth_max is None:
+            depth_max = dz * np.ceil(finite.max() / dz)
+    if depth_min > depth_max:
+        raise ValueError(f"depth_min ({depth_min}) exceeds depth_max ({depth_max})")
 
-    centers = np.arange(depth_min, depth_max + dz, dz)
+    # an integer count: np.arange with a float step overshoots depth_max
+    # by one bin for steps such as 0.1 that binary floats cannot represent
+    n = int(round((depth_max - depth_min) / dz)) + 1
+    centers = depth_min + dz * np.arange(n)
     edges = np.concatenate([centers - dz / 2, [centers[-1] + dz / 2]])
     return centers, edges
+
+
+#: Former private name, imported by downstream analysis scripts.
+_depth_edges = depth_edges
 
 
 def _bin_mean(depth: np.ndarray, values: np.ndarray, edges: np.ndarray) -> np.ndarray:
     """Bin-mean `values` by `depth` into the bins defined by `edges`.
 
     Samples where either `depth` or `values` is NaN are masked out before
-    binning, so a variable's own NaN edge samples (e.g. from phase-match
-    trimming) never suppress a bin that other variables can still fill.
+    binning, so a variable's own NaN samples never suppress a bin that
+    other variables can still fill.
     Bins with zero valid samples come out NaN rather than 0 (Matlab bug
     B4); samples outside `edges` fall out of `np.histogram` on their own
     rather than being clamped into the first/last bin (Matlab bug B3).
@@ -134,7 +156,8 @@ def _bin_or(depth: np.ndarray, flags: np.ndarray, edges: np.ndarray) -> np.ndarr
     """
     idx = np.digitize(depth, edges) - 1
     out = np.zeros(edges.size - 1, dtype=np.uint8)
-    ok = (idx >= 0) & (idx < out.size) & np.isfinite(depth)
+    # digitize puts NaN past the last edge, so the upper bound drops it
+    ok = (idx >= 0) & (idx < out.size)
     np.bitwise_or.at(out, idx[ok], flags[ok].astype(np.uint8))
     return out
 
@@ -216,7 +239,10 @@ def grid_casts(l1: xr.DataTree, params: GridParams | None = None) -> xr.Dataset:
     n_casts = cast_ids.size
 
     depth_all = ctd["depth"].values
-    centers, edges = _depth_edges(depth_all, params)
+    cast_label = ctd["cast"].values
+    # only cast samples are gridded, so deck and surface-soak samples must
+    # not stretch a derived depth range
+    centers, edges = depth_edges(depth_all[cast_label > 0], params)
     n_depth = centers.size
 
     grid_vars = [
@@ -227,25 +253,31 @@ def grid_casts(l1: xr.DataTree, params: GridParams | None = None) -> xr.Dataset:
         and np.issubdtype(da.dtype, np.floating)
     ]
 
-    cast_label = ctd["cast"].values
     time_all = ctd["time"].values
     lon_all = ctd["lon"].values
     lat_all = ctd["lat"].values
 
     gridded = {name: np.full((n_depth, n_casts), np.nan) for name in grid_vars}
-    mean_time = np.empty(n_casts, dtype="datetime64[ns]")
+    mean_time = np.full(n_casts, np.datetime64("NaT", "ns"))
     mean_lon = np.full(n_casts, np.nan)
     mean_lat = np.full(n_casts, np.nan)
 
     for j, cid in enumerate(cast_ids):
         mask = cast_label == cid
+        if not mask.any():
+            # a cast in the table without labeled samples, e.g. a time
+            # subset of an L1 tree: leave its column NaN and its time NaT
+            continue
         d = depth_all[mask]
         for name in grid_vars:
             gridded[name][:, j] = _bin_mean(d, ctd[name].values[mask], edges)
 
         mean_time[j] = _mean_time(time_all[mask])
-        mean_lon[j] = np.nanmean(lon_all[mask])
-        mean_lat[j] = np.nanmean(lat_all[mask])
+        # lon is all NaN on a fallback-latitude run; skip nanmean's
+        # empty-slice warning, once per cast
+        for out, vals in ((mean_lon, lon_all[mask]), (mean_lat, lat_all[mask])):
+            if np.isfinite(vals).any():
+                out[j] = np.nanmean(vals)
 
     chi_grid = {}
     if "chi" in l1.children:
@@ -258,12 +290,11 @@ def grid_casts(l1: xr.DataTree, params: GridParams | None = None) -> xr.Dataset:
         chi_cast = chi["cast"].values
         chi_depth = chi["depth"].values
         chi_flag_all = chi["chi_flag"].values
-        # Controller ruling: flags 1 (FLAG_SLOW) and 4 (FLAG_EMPTY)
-        # exclude a window from the means, and so does 32 (FLAG_RAIL),
-        # but chi_flag's bitwise-or
-        # still covers every window of the cast, so a bin can carry
-        # those bits even though the flagged windows did not
-        # contribute to chi/chi_tot/eps_chi/r/kmax.
+        # flags 1 (FLAG_SLOW), 4 (FLAG_EMPTY) and 32 (FLAG_RAIL) exclude
+        # a window from the means, but chi_flag's bitwise-or still covers
+        # every window of the cast, so a bin can carry those bits even
+        # though the flagged windows did not contribute to
+        # chi/chi_tot/eps_chi/r/kmax/phi.
         excluded = (chi_flag_all.astype(np.uint8) & (FLAG_SLOW | FLAG_EMPTY | FLAG_RAIL)) != 0
         # params.closure_exclude_flags adds bits for the closure-derived
         # fields only; chi itself does not pass through the closure.
@@ -310,7 +341,6 @@ def grid_casts(l1: xr.DataTree, params: GridParams | None = None) -> xr.Dataset:
     grid.attrs["closure_exclude_flags"] = int(params.closure_exclude_flags)
 
     if chi_grid:
-        chi = l1["chi"].to_dataset()
         for name in chi_grid:
             grid[name].attrs = dict(chi[name].attrs)
         for key in ("gain", "gain_source", "antialias", "modfish_version"):

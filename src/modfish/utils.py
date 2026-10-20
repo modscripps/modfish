@@ -180,6 +180,38 @@ def sampling_interval(time) -> float:
     return float(dt[regular].mean())
 
 
+def gap_runs(time, gap_factor: float = 1.5, min_gap: float = 0.0) -> list[slice]:
+    """Index slices of the gap-free runs of a time axis.
+
+    A run ends wherever a time step reaches `gap_factor` times the median
+    step, the threshold `modfish.tc` uses for gaps, and also exceeds
+    `min_gap` seconds.
+
+    Parameters
+    ----------
+    time : array_like
+        datetime64 timestamps, increasing.
+    gap_factor : float, optional
+        A step of at least this many median steps starts a new run.
+    min_gap : float, optional
+        s, steps no longer than this never start a new run. Default 0, so
+        `gap_factor` alone decides.
+
+    Returns
+    -------
+    list of slice
+        One `slice(start, stop)` per run, in order, covering every sample.
+        A record of fewer than two samples is one run.
+    """
+    time = np.asarray(time)
+    if time.size < 2:
+        return [slice(0, time.size)]
+    dt = np.diff(time) / np.timedelta64(1, "s")
+    breaks = np.flatnonzero((dt >= gap_factor * np.median(dt)) & (dt > min_gap)) + 1
+    return [slice(int(a), int(b))
+            for a, b in zip(np.r_[0, breaks], np.r_[breaks, time.size], strict=True)]
+
+
 def gap_aware_rate(x, time, smooth: float, gap_factor: float = 1.5) -> np.ndarray:
     """Smoothed rate of change of `x` per second, computed per gap-free run.
 
@@ -211,14 +243,12 @@ def gap_aware_rate(x, time, smooth: float, gap_factor: float = 1.5) -> np.ndarra
     x = np.asarray(x, dtype=float)
     time = np.asarray(time)
     fs = 1.0 / sampling_interval(time)
-    dt = np.diff(time) / np.timedelta64(1, "s")
-    breaks = np.flatnonzero(dt >= gap_factor * np.median(dt)) + 1
     window = max(int(round(smooth * fs)), 1)
     out = np.full(x.size, np.nan)
-    for a, b in zip(np.r_[0, breaks], np.r_[breaks, x.size]):
-        if b - a < 2:
+    for run in gap_runs(time, gap_factor):
+        if run.stop - run.start < 2:
             continue
-        out[a:b] = uniform_filter1d(np.gradient(x[a:b]) * fs, window, mode="nearest")
+        out[run] = uniform_filter1d(np.gradient(x[run]) * fs, window, mode="nearest")
     return out
 
 

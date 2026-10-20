@@ -83,21 +83,32 @@ def test_l1_gps_gap_masks_interior_positions(l0_tree):
     assert mid_hi > mid_lo
 
     l1 = make_l1(tree, FCTDConfig(tc=TCParams()))
-    lat = l1["ctd"].lat.data
-    lon = l1["ctd"].lon.data
+    ctd = l1["ctd"]
+    lat = ctd.lat.data
+    lon = ctd.lon.data
+    # lon is masked across the gap; lat is interpolated between the fixes
+    # either side, so depth (which needs only lat) survives the gap
     assert np.isnan(lon[mid_lo:mid_hi]).all()
-    assert np.isnan(lat[mid_lo:mid_hi]).all()
-    assert np.isfinite(lon[:5]).all()
-    assert np.isfinite(lat[:5]).all()
-    assert np.isfinite(lon[-5:]).all()
-    assert np.isfinite(lat[-5:]).all()
+    assert np.isfinite(lat).all()
+    assert np.isfinite(ctd["depth"].data[mid_lo:mid_hi]).all()
+    gps_kept = gapped_gps.lat.values
+    assert lat[mid_lo:mid_hi].min() >= min(gps_kept) - 1e-9
+    assert lat[mid_lo:mid_hi].max() <= max(gps_kept) + 1e-9
+    assert np.isfinite(lon[:5]).all() and np.isfinite(lon[-5:]).all()
+    assert ctd.attrs["latitude_source"] == "gps"
+    assert ctd.attrs["n_lon_masked"] > 0
+    assert "gps_max_gap" in ctd.attrs["position_note"]
 
-    cfg_fallback = FCTDConfig(tc=TCParams(), latitude_fallback=3.0)
-    l1b = make_l1(tree, cfg_fallback)
-    assert np.allclose(l1b["ctd"].lat.data[mid_lo:mid_hi], 3.0)
+    # a configured fallback no longer overrides interpolated GPS latitude
+    l1b = make_l1(tree, FCTDConfig(tc=TCParams(), latitude_fallback=3.0))
+    assert np.allclose(l1b["ctd"].lat.data, lat)
     assert np.isnan(l1b["ctd"].lon.data[mid_lo:mid_hi]).all()
-    assert np.isfinite(l1b["ctd"].lat.data[:5]).all()
-    assert not np.allclose(l1b["ctd"].lat.data[:5], 3.0)
+
+
+def test_l1_no_gps_gap_leaves_no_position_note(l0_tree):
+    ctd = make_l1(l0_tree, FCTDConfig(tc=TCParams()))["ctd"]
+    assert ctd.attrs["n_lon_masked"] == 0
+    assert "position_note" not in ctd.attrs
 
 
 def test_l1_casts_group_matches_labels(l0_tree):
@@ -178,3 +189,21 @@ def test_l1_dpdt_has_no_spike_across_a_time_gap(tmp_path):
     l1 = make_l1(concat_l0(files, groups=("ctd", "gps")), FCTDConfig())
     dpdt = l1["ctd"]["dPdt"].values
     assert np.nanmax(np.abs(dpdt)) < 10.0
+
+
+def test_position_interpolates_across_the_antimeridian():
+    from modfish.fctd.l1 import _add_position
+
+    t0 = np.datetime64("2025-12-06T00:00:00")
+    ctd_t = t0 + (np.arange(0, 61, 1) * 1e9).astype("timedelta64[ns]")
+    gps_t = t0 + (np.array([0, 60]) * 1e9).astype("timedelta64[ns]")
+    ctd = xr.Dataset(coords=dict(time=ctd_t))
+    gps = xr.Dataset(dict(lat=("time", [1.0, 1.0]), lon=("time", [179.9, -179.9])),
+                     coords=dict(time=gps_t))
+    lon = _add_position(ctd, gps, FCTDConfig())["lon"].values
+    assert np.all(np.abs(lon) >= 179.9 - 1e-9)
+    assert lon[30] == pytest.approx(180.0, abs=1e-6) or lon[30] == pytest.approx(-180.0, abs=1e-6)
+    # an ordinary track keeps its sign convention
+    gps2 = gps.assign(lon=("time", [-140.0, -139.0]))
+    lon2 = _add_position(ctd, gps2, FCTDConfig())["lon"].values
+    assert lon2[30] == pytest.approx(-139.5)

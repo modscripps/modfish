@@ -176,3 +176,33 @@ def test_concat_drops_whole_misstamped_leading_block(tmp_path):
     ctd = concat_l0([f])["ctd"].ds
     np.testing.assert_array_equal(ctd.p.values, p[4:])
     assert ctd.attrs["n_misstamped"] == 4
+
+
+def _ctd_records(n=1000, fs=16.0):
+    t = np.datetime64("2025-12-06T00:00:00") + (np.arange(n) / fs * 1e9).astype("timedelta64[ns]")
+    return xr.Dataset(dict(p=("time", np.arange(n, dtype=float))), coords=dict(time=t))
+
+
+def test_drop_misstamped_early_outlier_drops_only_itself():
+    """One record stamped a year early mid-file is the outlier. Dropping
+    every record stamped later than it would throw away the first half."""
+    from modfish.fctd.concat import _drop_misstamped
+
+    ds = _ctd_records()
+    t = ds.time.values.copy()
+    t[500] = t[500] - np.timedelta64(365, "D")
+    ds = ds.assign_coords(time=t)
+    out, n = _drop_misstamped(ds)
+    assert n == 1
+    assert out.sizes["time"] == 999
+    assert 500.0 not in out.p.values
+
+
+def test_drop_misstamped_late_outlier_drops_only_itself():
+    from modfish.fctd.concat import _drop_misstamped
+
+    ds = _ctd_records()
+    t = ds.time.values.copy()
+    t[500] = t[500] + np.timedelta64(365, "D")
+    out, n = _drop_misstamped(ds.assign_coords(time=t))
+    assert n == 1 and 500.0 not in out.p.values

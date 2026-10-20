@@ -1,3 +1,5 @@
+import dataclasses
+
 import pytest
 
 from modfish.fctd.config import FCTDConfig
@@ -73,3 +75,16 @@ def test_from_dict_accepts_thermal_mass_profile():
     cfg = FCTDConfig.from_dict({"tc": {"thermal_mass": True, "beta": 1 / 12, "thermal_mass_profile": prof}})
     assert cfg.tc.thermal_mass_profile == prof
     assert FCTDConfig().tc.thermal_mass_profile is None
+
+
+def test_keep_counts_removed_with_a_named_error():
+    """keep_counts=True always failed in make_l1; the field is gone and a
+    config that still sets it gets an error naming concat_l0."""
+    assert "keep_counts" not in {f.name for f in dataclasses.fields(FCTDConfig)}
+    with pytest.raises(ValueError, match="concat_l0"):
+        FCTDConfig.from_dict({"keep_counts": False})
+
+
+def test_groups_given_as_one_string():
+    assert FCTDConfig(groups="ctd").groups == ("ctd",)
+    assert FCTDConfig.from_dict({"groups": "ctd"}).groups == ("ctd",)
