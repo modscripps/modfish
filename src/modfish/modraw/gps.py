@@ -1,11 +1,11 @@
 #!/usr/bin/env python
 # coding: utf-8
 """
-GPS time extraction from `.modraw` files.
+GPS position fixes from `.modraw` files.
 
-Parses $GPZDA sentences (and $INZDA, the talker prefix 2024-format files use
-for the same sentence) from the GPS stream to extract absolute UTC
-timestamps.
+Parses `$GPGGA`/`$INGGA` position sentences and dates them from the
+`$GPZDA`/`$INZDA` time sentences in the same stream (2024-format files use
+the `IN` talker prefix).
 """
 
 import re
@@ -13,8 +13,6 @@ import re
 import numpy as np
 import pandas as pd
 import xarray as xr
-
-from .header import read_body
 
 
 #: `$GPZDA,hhmmss.ss,dd,mm,yyyy`, the GPS UTC time sentence. 2024-format files
@@ -33,31 +31,18 @@ _GGA = re.compile(
 )
 
 
-def load_gps_time(file):
-    """Read the GPS UTC timestamps interleaved in a .modraw file.
-
-    Useful as an absolute reference against the acquisition computer's clock,
-    which is what the file names and the header `GM_TIME` are based on.
-
-    Parameters
-    ----------
-    file : Path or str
-        Path to a .modraw file.
-
-    Returns
-    -------
-    time : pd.DatetimeIndex
-        UTC times from the `$GPZDA`/`$INZDA` sentences.
-    """
-    out = []
-    for match in _ZDA.finditer(read_body(file)):
+def _zda_times(body):
+    """Byte offsets and UTC times of the `$GPZDA`/`$INZDA` sentences in `body`."""
+    offsets, times = [], []
+    for match in _ZDA.finditer(body):
         hms, day, month, year = (g.decode() for g in match.groups())
-        out.append(pd.Timestamp(f"{year}-{month}-{day} {hms[:2]}:{hms[2:4]}:{hms[4:]}"))
-    return pd.DatetimeIndex(out)
+        offsets.append(match.start())
+        times.append(pd.Timestamp(f"{year}-{month}-{day} {hms[:2]}:{hms[2:4]}:{hms[4:]}"))
+    return np.array(offsets, dtype=int), times
 
 
 def decode_gga(body: bytes) -> xr.Dataset:
-    """Decode `$GPGGA` position sentences into a fix time series.
+    """Decode `$GPGGA`/`$INGGA` position sentences into a fix time series.
 
     FCTD GPS sentences carry the ordinary `T<10-digit>` laptop-clock prefix
     used throughout `.modraw` files, not the hex acquisition timestamp that
@@ -78,23 +63,19 @@ def decode_gga(body: bytes) -> xr.Dataset:
     Parameters
     ----------
     body : bytes
-        File bytes to search for GGA/ZDA sentences. `.modraw` files carry
-        the GPS stream past the header, but a caller may pass full-file
-        bytes here too, since the header region never contains a
-        `$GPGGA`/`$GPZDA`/`$INZDA` sentence.
+        File bytes to search for GGA/ZDA sentences, normally the whole file.
 
     Returns
     -------
     ds : xr.Dataset
         Position fixes, dim `time`, data vars `lat` and `lon` (decimal
         degrees, signed: negative for S/W). Empty (zero-length `time`) if
-        `body` has no `$GPGGA` sentences.
+        `body` has no GGA sentences.
 
     Raises
     ------
     ValueError
-        If `body` has `$GPGGA` sentences but no `$GPZDA`/`$INZDA` sentence
-        to date them from.
+        If `body` has GGA sentences but no ZDA sentence to date them from.
     """
     gga_matches = list(_GGA.finditer(body))
     if not gga_matches:
@@ -106,17 +87,9 @@ def decode_gga(body: bytes) -> xr.Dataset:
             },
         )
 
-    zda_matches = list(_ZDA.finditer(body))
-    if not zda_matches:
-        raise ValueError("$GPGGA sentences present but no $GPZDA/$INZDA sentence to date them from")
-
-    zda_offsets = np.array([m.start() for m in zda_matches])
-    zda_timestamps = []
-    for match in zda_matches:
-        hms, day, month, year = (g.decode() for g in match.groups())
-        zda_timestamps.append(
-            pd.Timestamp(f"{year}-{month}-{day} {hms[:2]}:{hms[2:4]}:{hms[4:]}")
-        )
+    zda_offsets, zda_timestamps = _zda_times(body)
+    if not zda_timestamps:
+        raise ValueError("GGA sentences present but no ZDA sentence to date them from")
 
     times, lats, lons = [], [], []
     for match in gga_matches:

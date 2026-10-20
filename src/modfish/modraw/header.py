@@ -38,25 +38,6 @@ def read_header(file):
         return f.read(nbytes).decode("latin-1")
 
 
-def read_body(file):
-    """Read everything in a .modraw file after the header.
-
-    Parameters
-    ----------
-    file : Path or str
-        Path to a .modraw file.
-
-    Returns
-    -------
-    body : bytes
-        File contents past the header.
-    """
-    head = read_header(file)
-    with open(file, "rb") as f:
-        f.seek(len(head.encode("latin-1")))
-        return f.read()
-
-
 def header_setup(head):
     """Extract the acquisition setup fields from a .modraw header.
 
@@ -123,6 +104,21 @@ def _cal_from_text(text, key_aliases=None):
     return cal
 
 
+def cal_complete(cal):
+    """Whether `cal` holds every coefficient `sbe49_to_physical` needs.
+
+    Parameters
+    ----------
+    cal : dict
+        Coefficients as returned by `sbe49_cal` or `parse_dcal`.
+
+    Returns
+    -------
+    bool
+    """
+    return {k.lower() for k in _CAL_KEYS} <= set(cal)
+
+
 def sbe49_cal(head):
     """Extract the SBE49 calibration coefficients from a .modraw header.
 
@@ -134,7 +130,8 @@ def sbe49_cal(head):
     Returns
     -------
     cal : dict
-        Calibration coefficients, keys lowercased.
+        Calibration coefficients found, keys lowercased. Can be partial; see
+        `cal_complete`.
     """
     return _cal_from_text(head)
 
@@ -146,8 +143,7 @@ def parse_som3(payload):
     little-endian size immediately before its ASCII tag. This extracts the
     `EFE`/`EFE3`/`EFE4` submodule, which describes the analog channel setup:
     channel count, records per block, and per-channel name/ADC config/full
-    range. Layout follows the rust parser (`src/setup.rs:65-177`) and the
-    Matlab reader (`mod_som_read_setup_from_raw.m:339-383`).
+    range. Layout follows the Matlab reader `mod_som_read_setup_from_raw.m`.
 
     Parameters
     ----------
@@ -160,7 +156,10 @@ def parse_som3(payload):
         - n_channels : int
         - channels : list of str, channel names (e.g. "t1", "c1", "a1")
         - adc_conf : list of str, "unipolar" or "bipolar" per channel
-        - full_range : list of float, full-scale range per channel (volts)
+        - full_range : list of float, full-scale range per channel (volts).
+          Not read from the payload: 1.8 V for accelerometer channels
+          (names starting with "a"), 2.5 V otherwise, as in the Matlab
+          setup code.
         - recs_per_block : int
 
     Raises

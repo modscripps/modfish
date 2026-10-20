@@ -88,6 +88,26 @@
     can now come out negative.
 
 ### Bug fixes
+-   `modraw.read` no longer loses a whole file to one bad stream. A record
+    timestamp past the datetime64[ns] range (one flipped high hex digit)
+    raised `OverflowError`; such records are now dropped and counted in
+    the group's `n_bad_time`. A decoder that raises `ValueError` (GGA
+    without a ZDA, no usable payload, power-on timestamps) now leaves only
+    its group out, with a warning, as missing calibration already did.
+-   Packets whose trailing checksum fails are dropped by the SB49, ECOP
+    and EFE4 decoders and counted in each group's `n_bad_checksum`.
+    `Packet` carries `chk_ok`. None of the 8.7 million frames in the 690
+    MOTIVE 2025 d07 files fails its checksum.
+-   A header with only part of the SBE49 coefficients no longer skips the
+    `$DCAL` fallback and fails with `KeyError` (new
+    `modraw.header.cal_complete`).
+-   `modraw.convert` writes `<stem>.nc.tmp` and renames it, so an
+    interrupted write leaves no truncated `.nc` for a later
+    `overwrite=False` run to skip.
+-   `read` adds no empty `vnav` group for `$VNAV` frames without `$VNMAR`,
+    `vnav` counts sentences with a bad checksum, and the root
+    `block_time` is datetime64[ns] as documented (it was ms under pandas
+    3).
 -   `fctd.find_casts` smooths and differentiates pressure per stretch
     between time gaps longer than `CastParams.smooth` (16 s). A pressure
     jump across a gap made a fake cast (a 250 dbar "downcast" across a
@@ -219,6 +239,11 @@
     default `FCTDConfig()` applies no correction.
 
 ### Internal Changes
+-   Removed `modraw.load_ctd`, `load_ctd_time_series`, `load_gps_time`,
+    `block_counts` and `header.read_body`. They framed only the bytes past
+    the declared header and so returned less data than `modraw.read`, the
+    entry point. Hex, timestamp and checksum helpers moved to
+    `modraw._util`.
 -   `tc.downup_separation` indexes casts by their time runs and
     `tc.thermal_mass_correction` evaluates its recursion with
     `scipy.signal.lfilter`; a 242-point thermal-mass cost map on the full

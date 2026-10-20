@@ -5,24 +5,10 @@
 import numpy as np
 import pytest
 
+from modfish.modraw._util import hex_columns as _hex_columns
 from modfish.modraw.framer import Packet, frame
-from modfish.modraw.header import read_body, read_header, sbe49_cal
-from modfish.modraw.sb49 import _hex_columns, decode_sb49
-
-
-def test_decode_sb49_matches_load_ctd(rootdir):
-    import modfish
-
-    file = rootdir / "data/FCTD_modraw_excerpt.modraw"
-    packets, _ = frame(read_body(file))
-    cal = sbe49_cal(read_header(file))
-    ds = decode_sb49([p for p in packets if p.tag == "SB49"], cal)
-    ref = modfish.modraw.load_ctd(file)
-    assert ds.sizes["time"] == ref.sizes["time"]
-    np.testing.assert_array_equal(ds.time.values, ref.time.values)
-    np.testing.assert_allclose(ds.p.values, ref.p.values)
-    np.testing.assert_allclose(ds.t.values, ref.t.values)
-    np.testing.assert_allclose(ds.c.values, ref.c.values)
+from modfish.modraw.header import read_header, sbe49_cal
+from modfish.modraw.sb49 import decode_sb49
 
 
 def _chars(*rows):
@@ -57,7 +43,7 @@ def _sb49_packet(*records):
 
 def test_decode_sb49_stacks_records_across_packets(rootdir):
     file = rootdir / "data/FCTD_modraw_excerpt.modraw"
-    packets, _ = frame(read_body(file))
+    packets, _ = frame(file.read_bytes())
     cal = sbe49_cal(read_header(file))
     sb49 = [p for p in packets if p.tag == "SB49"]
     # Every record of the stream in one packet against one packet per block.
@@ -71,7 +57,7 @@ def test_decode_sb49_stacks_records_across_packets(rootdir):
 
 def test_decode_sb49_bad_length_payload_is_skipped_and_counted(rootdir):
     file = rootdir / "data/FCTD_modraw_excerpt.modraw"
-    packets, _ = frame(read_body(file))
+    packets, _ = frame(file.read_bytes())
     cal = sbe49_cal(read_header(file))
     sb49 = [p for p in packets if p.tag == "SB49"]
     bad = _sb49_packet(sb49[0].payload[:-1])

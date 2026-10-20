@@ -1,15 +1,17 @@
 """Decode EFE4 microconductivity and accelerometer packets."""
 
 import numpy as np
-import pandas as pd
 import xarray as xr
+
+from ._util import ms_to_datetime
 
 
 def decode_efe4(packets, meta):
     """Decode EFE4 data packets into a time series Dataset.
 
     EFE4 record layout: 8-byte little-endian u64 millisecond timestamp +
-    3-byte big-endian ADC counts per channel. 80 records per block.
+    3-byte big-endian ADC counts per channel, `meta["recs_per_block"]`
+    records per block (80 on MOTIVE FCTD files).
 
     Voltage conversion:
     - Unipolar: volts = full_range * counts / 2**24
@@ -27,10 +29,13 @@ def decode_efe4(packets, meta):
     Returns
     -------
     xr.Dataset
-        Dataset with dimension "time" (length 80 * n_valid_packets) and
-        one data variable per channel named as in meta["channels"], with
-        units "V". Attribute "n_bad_length" counts packets with
-        incorrect payload length.
+        Dimension "time" (`recs_per_block` per kept packet, less dropped
+        records) and one data variable per channel named as in
+        `meta["channels"]`, units "V". Attrs count what was dropped:
+        `n_bad_checksum` packets whose trailing checksum failed (binary
+        counts give no other sign of corruption), `n_bad_length` packets
+        with the wrong payload length, and `n_bad_time` records whose
+        timestamp lies outside the datetime64[ns] range.
 
     Raises
     ------
@@ -41,16 +46,21 @@ def decode_efe4(packets, meta):
     n_ch = meta["n_channels"]
     rec = np.dtype([("ts", "<u8"), ("adc", "u1", (n_ch, 3))])
     block_len = meta["recs_per_block"] * rec.itemsize
-    good = [p.payload for p in packets if len(p.payload) == block_len]
-    n_bad = len(packets) - len(good)
+    checked = [p for p in packets if p.chk_ok]
+    n_bad_checksum = len(packets) - len(checked)
+    good = [p.payload for p in checked if len(p.payload) == block_len]
+    n_bad = len(checked) - len(good)
     if not good:
         raise ValueError("no EFE4 packets with a valid payload length")
     raw = np.frombuffer(b"".join(good), dtype=rec)
     ts = raw["ts"]
     if np.median(ts) < 1e9:
         raise ValueError("power-on-relative EFE timestamps are not supported yet")
-    time = pd.to_datetime(ts, unit="ms").values.astype("datetime64[ns]")
-    adc = raw["adc"].astype("u4")
+    time = ms_to_datetime(ts)
+    keep = ~np.isnat(time)
+    n_bad_time = int((~keep).sum())
+    time = time[keep]
+    adc = raw["adc"][keep].astype("u4")
     counts = (adc[:, :, 0] << 16) | (adc[:, :, 1] << 8) | adc[:, :, 2]
 
     data_vars = {}
@@ -64,5 +74,6 @@ def decode_efe4(packets, meta):
     ds = xr.Dataset(coords={"time": ("time", time)}, data_vars=data_vars)
     for name in meta["channels"]:
         ds[name].attrs = dict(long_name=f"EFE channel {name}", units="V")
-    ds.attrs["n_bad_length"] = n_bad
+    ds.attrs = dict(n_bad_checksum=n_bad_checksum, n_bad_length=n_bad,
+                    n_bad_time=n_bad_time)
     return ds

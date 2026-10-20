@@ -3,6 +3,8 @@ import logging
 import numpy as np
 import pytest
 import xarray as xr
+from modraw_frames import make_frame as _make_frame
+from modraw_frames import minimal_header as _minimal_header
 
 import modfish
 
@@ -10,46 +12,6 @@ import modfish
 @pytest.fixture(scope="module")
 def tree(rootdir):
     return modfish.modraw.read(rootdir / "data/FCTD_modraw_excerpt.modraw")
-
-
-def _make_frame(tag, timestamp_ms, payload, t_prefix=None):
-    """Build one SOM frame with a correct trailing XOR checksum.
-
-    Mirrors `make_frame` in `tests/test_modraw_framer.py`; duplicated here
-    (rather than imported) to keep this test file self-contained.
-    """
-    chk = 0
-    for byte in payload:
-        chk ^= byte
-    head = b"" if t_prefix is None else b"T%010d" % t_prefix
-    return (
-        head
-        + b"$" + tag
-        + b"%016x" % timestamp_ms
-        + b"%08x" % len(payload)
-        + b"*00"  # header checksum, hex-validated only
-        + payload
-        + b"*%02X\r\n" % chk
-    )
-
-
-def _minimal_header(nbytes=200):
-    """Build a header `read_header`/`header_setup`/`sbe49_cal` can parse.
-
-    Not a slice of the real fixture: the fixture's own declared header span
-    (`header_file_size_inbytes`) falls *inside* its block stream (see the
-    caution in `modfish.modraw.framer`'s module docstring) and so contains
-    genuine `$SOM3`/`$DCAL`/`$SB49`/... frames and real calibration
-    coefficients. Reusing it here would defeat the "no cal"/"no SOM3" tests
-    below, since those blocks would already be present. This header instead
-    declares its own length on the first line and pads with filler text
-    that contains no `$`, no calibration keys, and no `SOM3`/`DCAL` tag.
-    """
-    first_line = f"header_file_size_inbytes = {nbytes}\n".encode()
-    filler = b"X" * (nbytes - len(first_line))
-    header = first_line + filler
-    assert len(header) == nbytes
-    return header
 
 
 @pytest.fixture
@@ -89,17 +51,6 @@ def synthetic_body():
 def test_read_returns_datatree_with_expected_groups(tree):
     assert isinstance(tree, xr.DataTree)
     assert set(tree.children) == {"ctd", "efe", "ecop", "gps"}  # no ALTI in fixture
-
-
-def test_read_ctd_group_contains_load_ctd(tree, rootdir):
-    # read() frames the full file and captures SB49 blocks that sit inside
-    # the (wrongly) declared header span, so it holds a superset of what the
-    # read_body-based load_ctd sees; the legacy records must match exactly.
-    ref = modfish.modraw.load_ctd(rootdir / "data/FCTD_modraw_excerpt.modraw")
-    n_extra = tree["ctd"].ds.sizes["time"] - ref.sizes["time"]
-    assert n_extra >= 0
-    np.testing.assert_array_equal(tree["ctd"].time.values[n_extra:], ref.time.values)
-    np.testing.assert_allclose(tree["ctd"].ds.p.values[n_extra:], ref.p.values)
 
 
 def test_read_root_attrs_carry_quality_tallies(tree):
@@ -177,3 +128,87 @@ def test_read_warns_when_efe4_present_without_som3(synthetic_body, tmp_path, cap
         "EFE4" in record.message and "SOM3" in record.message
         for record in caplog.records
     )
+
+
+def _write(tmp_path, name, body):
+    path = tmp_path / name
+    path.write_bytes(body)
+    return path
+
+
+def _ctd_body(sb49_packets=None, header_text=b""):
+    """Synthetic file: header, the fixture's $DCAL, its first 20 $SB49."""
+    from modraw_frames import fixture_packets, minimal_header, reframe
+
+    pk = fixture_packets()
+    sb49 = pk["SB49"][:20] if sb49_packets is None else sb49_packets
+    return minimal_header(400, header_text) + reframe(pk["DCAL"]) + reframe(sb49)
+
+
+def test_read_overflowing_record_timestamp_drops_only_that_record(tmp_path):
+    """One flipped high hex digit in a record timestamp is valid hex but far
+    past datetime64[ns]. It used to raise OverflowError, losing the file."""
+    from modraw_frames import fixture_packets
+
+    pk = fixture_packets()
+    bad = pk["SB49"][3]
+    payload = bytearray(bad.payload)
+    payload[2:3] = b"f"  # 0000019a... -> 00f0019a..., about year 135000
+    bad = type(bad)(**{**bad.__dict__, "payload": bytes(payload)})
+    packets = pk["SB49"][:3] + [bad] + pk["SB49"][4:20]
+    tree = modfish.modraw.read(_write(tmp_path, "ovf.modraw", _ctd_body(packets)))
+    ctd = tree["ctd"].ds
+    n_rec = sum(len(p.payload) // 40 for p in pk["SB49"][:20])
+    assert ctd.sizes["time"] == n_rec - 1
+    assert ctd.attrs["n_bad_time"] == 1
+    assert not np.isnat(ctd.time.values).any()
+
+
+def test_read_decoder_failure_omits_only_that_group(tmp_path, caplog):
+    """GGA sentences without a ZDA to date them used to raise and lose the
+    CTD too. The gps group is now omitted with a warning."""
+    body = _ctd_body() + b"T0000000001$GPGGA,120000.00,0100.0000,N,13930.0000,W,1,08\r\n"
+    with caplog.at_level(logging.WARNING):
+        tree = modfish.modraw.read(_write(tmp_path, "gga.modraw", body))
+    assert "ctd" in tree.children and "gps" not in tree.children
+    assert any("gps" in r.message and "ZDA" in r.message for r in caplog.records)
+
+
+def test_read_drops_bad_checksum_packets(tmp_path):
+    from modraw_frames import fixture_packets, make_frame
+
+    pk = fixture_packets()
+    sb = pk["SB49"][:20]
+    corrupt = bytearray(sb[5].payload)
+    corrupt[20] ^= 0x01  # one flipped bit in the counts
+    stale = 0
+    for byte in sb[5].payload:
+        stale ^= byte  # checksum of the original payload, wrong for the corrupt one
+    body = _ctd_body(sb[:5]) + make_frame(b"SB49", sb[5].timestamp_ms, bytes(corrupt), chk=stale)
+    good = modfish.modraw.read(_write(tmp_path, "good.modraw", _ctd_body(sb[:5])))["ctd"].ds
+    tree = modfish.modraw.read(_write(tmp_path, "badchk.modraw", body))
+    assert tree.attrs["n_bad_checksum"] == 1
+    assert tree["ctd"].ds.sizes["time"] == good.sizes["time"]
+    assert tree["ctd"].attrs["n_bad_checksum"] == 1
+
+
+def test_read_partial_header_cal_falls_back_to_dcal(tmp_path):
+    """A header carrying only some coefficients (no CG/CH/CI/CJ) used to
+    skip the $DCAL fallback and fail with KeyError: 'cg'."""
+    text = b"TA0= 7.906934e-04\nTA1= 2.938320e-04\nPA0= -5.312621e-02\n"
+    tree = modfish.modraw.read(_write(tmp_path, "partial.modraw", _ctd_body(header_text=text)))
+    assert "ctd" in tree.children
+    assert tree["ctd"].attrs["cg"] == pytest.approx(-1.005065)
+
+
+def test_read_vnav_without_vnmar_adds_no_group(tmp_path):
+    from modraw_frames import make_frame
+
+    body = _ctd_body() + make_frame(b"VNAV", 1765000000000,
+                                    b"0000019afe33908b$VNYPR,+010.0,+001.0,-002.0*00\r\n")
+    tree = modfish.modraw.read(_write(tmp_path, "vnypr.modraw", body))
+    assert "vnav" not in tree.children
+
+
+def test_read_block_time_is_nanoseconds(tree):
+    assert tree.ds.block_time.dtype == np.dtype("datetime64[ns]")

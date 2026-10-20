@@ -21,30 +21,19 @@ the distance reading as ASCII decimal text, the payload is empty, and the
 frame ends with a single `*hh\\r\\n` directly after that field (matching
 Matlab's non-greedy regex, which stops at the first `*XX\\r\\n` it finds).
 
-This layout is a planning-time hypothesis, UNVERIFIED against real bytes: a
-search of ~700 `.modraw` files across two MOTIVE cruises turned up no `$ALTI`
-frame (see `test_frame_alti_length_field_is_reading_not_length`, skipped, in
-`tests/test_modraw_framer.py`). ALTI is documented as "on demand, 1
-value/block", so it may simply be absent from the deployments searched so
-far.
+This layout comes from the Matlab reader and is unverified against real
+bytes: no `$ALTI` frame turned up in about 700 `.modraw` files from two
+MOTIVE cruises. ALTI is documented as "on demand, 1 value/block", so it may
+simply be absent from the deployments searched so far.
 
-Caution for callers: `header.read_body()` is not a safe substitute for the
-whole file when you want every SOM frame. In `tests/data/FCTD_modraw_excerpt.
-modraw`, `header_file_size_inbytes` (7069) declares a boundary that falls
-*inside* the block stream, not before it: `$SOM3` and `$DCAL` (the two
-one-off metadata blocks), plus the first two `$SB49`, one `$EFE4`, and eight
-`$ECOP` data frames, are all written before that boundary and so are excluded
-by `read_body()`. `frame(read_body(file))` on this fixture finds SB49=236,
-EFE4=119, ECOP=952, and no SOM3/DCAL at all (152 fewer, when you add up
-those 5 tags, than the whole-file counts of 238/120/960/1/1); `frame()` on
-the raw file bytes finds every one of them with zero bad checksums.
-Confirmed by hand (`re.findall(rb"\\$SB49", raw)` == 238 vs. 236 on
-`read_body()`'s output). Anyone parsing `$SOM3`/`$DCAL` metadata via
-`frame()` should scan the raw file, not `read_body()`'s output, or should
-first confirm the file's header truly ends before its first block.
+Pass the whole file to `frame`. A file's declared header length can fall
+inside the block stream, so the bytes past it can miss leading `$SOM3`,
+`$DCAL` and data frames.
 """
 
 import dataclasses
+
+from ._util import xor_checksum
 
 _HEADER_LEN = 32  # $ + 4 tag + 16 ts + 8 length + * + 2 checksum
 _TRAILER_LEN = 5  # * + 2 checksum + \r\n
@@ -54,18 +43,55 @@ _HEXDIGITS = frozenset(b"0123456789abcdefABCDEF")
 
 @dataclasses.dataclass
 class Packet:
-    tag: str  # e.g. "SB49", "EFE4"
-    timestamp_ms: int  # 16-hex header timestamp
-    laptop_ts_cs: int | None  # T-prefix, centiseconds, None if absent
-    payload: bytes  # empty for ALTI
-    length_field: bytes  # raw 8 length chars; holds the reading for ALTI
+    """One decoded SOM frame.
+
+    Parameters
+    ----------
+    tag : str
+        Four-character tag, e.g. "SB49", "EFE4".
+    timestamp_ms : int
+        The 16-hex header timestamp, ms (since 1970 for values above 1e9,
+        since power-on below).
+    laptop_ts_cs : int or None
+        `T`-prefix laptop clock, centiseconds, None if absent.
+    payload : bytes
+        Frame payload. Empty for ALTI.
+    length_field : bytes
+        The raw 8 length characters; for ALTI they hold the reading.
+    chk_ok : bool
+        True when the trailing XOR checksum matches the payload. ALTI
+        frames carry no payload checksum and are always True.
+    """
+
+    tag: str
+    timestamp_ms: int
+    laptop_ts_cs: int | None
+    payload: bytes
+    length_field: bytes
+    chk_ok: bool = True
 
 
 @dataclasses.dataclass
 class FrameStats:
+    """Counters from one `frame` scan.
+
+    Parameters
+    ----------
+    n_frames : int
+        Frames decoded.
+    n_resync : int
+        Failed frame attempts: `$` anchors that did not start a valid
+        frame. Interleaved NMEA sentences and header text count here, so
+        this is not a corruption measure.
+    n_bad_checksum : int
+        Frames whose trailing XOR checksum did not match.
+    tag_counts : dict of str to int
+        Frames per tag.
+    """
+
     n_frames: int = 0
-    n_resync: int = 0  # failed frame attempts (rejected $ anchors), not bytes skipped
-    n_bad_checksum: int = 0  # trailing XOR mismatches
+    n_resync: int = 0
+    n_bad_checksum: int = 0
     tag_counts: dict[str, int] = dataclasses.field(default_factory=dict)
 
 
@@ -160,10 +186,7 @@ def _try_frame_at(body, dollar, pos):
     if body[payload_end + 3 : payload_end + 5] != b"\r\n":
         return None
 
-    chk = 0
-    for byte in payload:
-        chk ^= byte
-    chk_ok = trailer_chk_bytes.upper() == b"%02X" % chk
+    chk_ok = trailer_chk_bytes.upper() == b"%02X" % xor_checksum(payload)
 
     frame_end = payload_end + _TRAILER_LEN
     laptop_ts_cs = _detect_t_prefix(body, dollar, pos)
@@ -173,6 +196,7 @@ def _try_frame_at(body, dollar, pos):
         laptop_ts_cs=laptop_ts_cs,
         payload=payload,
         length_field=length_bytes,
+        chk_ok=chk_ok,
     )
     return packet, frame_end, chk_ok
 
@@ -183,14 +207,14 @@ def frame(body):
     Parameters
     ----------
     body : bytes
-        File contents past the header, as returned by
-        `modfish.modraw.header.read_body`.
+        The whole file's bytes (see the module docstring for why not only
+        the part past the declared header).
 
     Returns
     -------
     packets : list of Packet
         Every frame decoded, in stream order. Frames with a bad trailing
-        checksum are still included; see `stats.n_bad_checksum`.
+        checksum are included with `chk_ok` False; the decoders drop them.
     stats : FrameStats
         Counters describing the scan: frames found, failed frame attempts
         (rejected `$` anchors, `n_resync`), bad checksums, and a per-tag
@@ -218,40 +242,3 @@ def frame(body):
         pos = end
     return packets, stats
 
-
-def block_counts(file, tags=("SB49", "EFE4", "VNAV", "VNMAR", "ECOP", "ALTI", "GPZDA")):
-    """Count the blocks of each stream in a .modraw file.
-
-    A quick way to see which sensors were writing to a file, and at what rate.
-
-    Scans only `header.read_body()`'s output, i.e. past the file's declared
-    header span. That declared span can fall *inside* the block stream
-    rather than before it (see the caution in this module's docstring), in
-    which case frames written before the boundary are excluded here. Counts
-    returned by this function can therefore come out lower than the
-    `n_blocks_<TAG>` attrs `modfish.modraw.reader.read()` reports for the
-    same file, since `read()` frames the whole file instead of
-    `read_body()`'s output.
-
-    Parameters
-    ----------
-    file : Path or str
-        Path to a .modraw file.
-    tags : iterable of str, optional
-        Stream tags to count.
-
-    Returns
-    -------
-    counts : dict
-        Number of occurrences of each tag.
-    """
-    from modfish.modraw.header import read_body
-
-    body = read_body(file)
-    _, stats = frame(body)
-    counts = {tag: stats.tag_counts.get(tag, 0) for tag in tags}
-    # NMEA-style sentences do not use the SOM frame; count them by search.
-    for tag in tags:
-        if tag in ("VNAV", "VNMAR", "GPZDA", "GPGGA", "INGGA"):
-            counts[tag] = body.count(b"$" + tag.encode())
-    return counts
