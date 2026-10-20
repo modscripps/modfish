@@ -102,15 +102,10 @@ def test_frame_tag_counts_accumulate():
 
 
 def test_frame_fixture_matches_known_tag_counts(rootdir):
-    # Deliberately reads the whole file, not `read_body()`'s output: the
-    # fixture's own `header_file_size_inbytes` (7069) declares a boundary
-    # that falls *inside* the block stream. `$SOM3` and `$DCAL` (the two
-    # metadata blocks) plus the first two `$SB49`, one `$EFE4`, and eight
-    # `$ECOP` data frames are physically written before that boundary, so
-    # `read_body()` excludes real frames. Confirmed by hand: a plain
-    # `re.findall(rb"\$SB49", ...)` over the raw file gives 238, over
-    # `read_body()`'s output only 236, with the difference landing inside the
-    # first 7069 bytes. See the framer.py module docstring.
+    # The fixture's `header_file_size_inbytes` (7069) falls inside the
+    # block stream: `$SOM3`, `$DCAL`, the first two `$SB49`, one `$EFE4` and
+    # eight `$ECOP` frames sit before it, so only a whole-file scan finds
+    # all 238 `$SB49` (236 past the declared header).
     body = (rootdir / "data/FCTD_modraw_excerpt.modraw").read_bytes()
     _, stats = frame(body)
     assert stats.tag_counts["SB49"] == 238

@@ -4,10 +4,12 @@
 magnetic, acceleration and angular-rate register. Each sentence is preceded
 by its own 16-hex millisecond timestamp and ends with the NMEA XOR checksum
 over the bytes between `$` and `*`. Observed at 40.0 Hz (25 ms median
-sentence spacing) on both MOTIVE cruises:
-`tests/data/EPSI_modraw_excerpt_2024.modraw` (138 `$VNAV` frames, 1380
-`$VNMAR` sentences) from 2024, and `FCTD25_12_09_183408.modraw` from 2025
-d09 (1106 `$VNAV` frames, 11060 `$VNMAR` sentences).
+sentence spacing) on MOTIVE 2024 and 2025 files, ten sentences per frame.
+Other VectorNav registers (`$VNYPR`) are not decoded.
+
+Payloads are joined before scanning. Every `$VNAV` payload seen so far
+starts with a full timestamp and `$VNMAR` and ends with `\\r\\n`, so no
+sentence is split across frames.
 """
 
 import re
@@ -15,6 +17,7 @@ import re
 import numpy as np
 import xarray as xr
 
+from ._util import ms_to_datetime, xor_checksum
 from .framer import Packet
 
 _VNMAR = re.compile(
@@ -32,44 +35,61 @@ _FIELDS = (
 )
 
 
-# Group numbering, verified against the fixture's first sentence: 1 = the
-# 16-hex millisecond timestamp, 2 = the bytes between `$` and `*` (what the
-# checksum covers), 3 through 11 = the nine fields in order, 12 = the checksum.
-
-
-def _checksum_ok(sentence: bytes, stated: bytes) -> bool:
-    ck = 0
-    for byte in sentence:
-        ck ^= byte
-    return ck == int(stated, 16)
+# Group numbering: 1 = the 16-hex millisecond timestamp, 2 = the bytes
+# between `$` and `*` (what the checksum covers), 3 through 11 = the nine
+# fields in order, 12 = the checksum.
 
 
 def decode_vnmar_bytes(body: bytes) -> xr.Dataset:
-    """Decode every well-formed `$VNMAR` sentence in a byte string."""
-    times, cols = [], [[] for _ in _FIELDS]
+    """Decode every well-formed `$VNMAR` sentence in a byte string.
+
+    Parameters
+    ----------
+    body : bytes
+        Bytes holding `<16 hex ms>$VNMAR,...*hh` sentences.
+
+    Returns
+    -------
+    xr.Dataset
+        Dim `time`, the nine `_FIELDS` variables (magnetic field in Gauss,
+        acceleration in m s-2, angular rate in rad s-1). Sentences with a
+        bad NMEA checksum or a timestamp outside the datetime64[ns] range
+        are dropped and counted in `attrs["n_bad_checksum"]` and
+        `attrs["n_bad_time"]`. Empty when `body` holds no `$VNMAR`.
+    """
+    ms, cols = [], [[] for _ in _FIELDS]
+    n_bad_checksum = 0
     for m in _VNMAR.finditer(body):
-        if not _checksum_ok(m.group(2), m.group(12)):
+        if xor_checksum(m.group(2)) != int(m.group(12), 16):
+            n_bad_checksum += 1
             continue
-        times.append(np.datetime64(int(m.group(1), 16), "ms").astype("datetime64[ns]"))
+        ms.append(int(m.group(1), 16))
         for i in range(9):
             cols[i].append(float(m.group(3 + i)))
-    coords = {"time": np.array(times, dtype="datetime64[ns]")}
+    time = ms_to_datetime(np.array(ms, dtype="uint64"))
+    keep = ~np.isnat(time)
     data = {
-        name: ("time", np.array(col, dtype=float), {"units": units})
-        for (name, units), col in zip(_FIELDS, cols)
+        name: ("time", np.array(col, dtype=float)[keep], {"units": units})
+        for (name, units), col in zip(_FIELDS, cols, strict=True)
     }
-    ds = xr.Dataset(data, coords=coords)
-    ds.attrs["source"] = "VNMAR"
+    ds = xr.Dataset(data, coords={"time": time[keep]})
+    ds.attrs = dict(source="VNMAR", n_bad_checksum=n_bad_checksum,
+                    n_bad_time=int((~keep).sum()))
     return ds
 
 
-# Joining payloads before scanning would lose a sentence split across two
-# packets. Checked directly against
-# tests/data/EPSI_modraw_excerpt_2024.modraw: every one of its 138 $VNAV
-# payloads starts with a full 16-hex timestamp + $VNMAR and ends with
-# \r\n, so scanning each payload on its own and scanning the joined bytes
-# both find the same 1380 sentences. No split sentence has been observed
-# there or checked for in any other fixture.
 def decode_vnmar(packets: list[Packet]) -> xr.Dataset:
-    """Decode framed `$VNAV` packets into a VectorNav time series."""
+    """Decode framed `$VNAV` packets into a VectorNav time series.
+
+    Parameters
+    ----------
+    packets : list of Packet
+        `$VNAV` packets from `modfish.modraw.framer.frame`. The frame
+        checksum is not used: each sentence carries its own.
+
+    Returns
+    -------
+    xr.Dataset
+        See `decode_vnmar_bytes`.
+    """
     return decode_vnmar_bytes(b"".join(p.payload for p in packets))

@@ -4,24 +4,27 @@
 Altimeter distance decoder for `.modraw` files.
 
 Decodes ALTI (altimeter) frames into distance measurements. The layout is
-UNVERIFIED against real bytes: a search of ~700 `.modraw` files across two
-MOTIVE cruises turned up no `$ALTI` frames. This implementation is based
-purely on Matlab v4 semantics (lines 674-709 of `mod_som_read_epsi_files_v4.m`).
+unverified against real bytes: no `$ALTI` frame turned up in about 700
+`.modraw` files from two MOTIVE cruises. The decoding follows the Matlab
+reader `mod_som_read_epsi_files_v4.m`.
 """
 
 import numpy as np
 import xarray as xr
 
+from ._util import ms_to_datetime
 from .framer import Packet
 
 
 def decode_alti(packets: list[Packet]) -> xr.Dataset:
     """Decode framed ALTI packets into an altimeter distance time series.
 
-    Conversion follows Matlab v4 (lines 674-709): `dst = str2double(length_chars)
-    * 1e-5 * 1500`. This uses 10 microsecond time units and assumes a sound
-    speed of 1500 m/s, with no factor of 1/2 (the Matlab treats it this way;
-    any geometry correction is owned by the later pipeline).
+    Conversion as in the Matlab reader: `dst = reading * 1e-5 * 1500`, the
+    reading in units of 10 microseconds and a sound speed of 1500 m/s. The
+    Matlab reader applies no factor of 1/2 and treats `dst` as the slant
+    distance to the bottom, from which it computes height above bottom for
+    the 10 degree mounting angle. Whether the instrument reports one-way or
+    round-trip time is not verified; `dst` follows the Matlab convention.
 
     Parameters
     ----------
@@ -33,23 +36,18 @@ def decode_alti(packets: list[Packet]) -> xr.Dataset:
     Returns
     -------
     ds : xr.Dataset
-        Altimeter distance at the ALTI sample rate, dim `time`, var `dst`.
-        Unreadable readings (where the 8 characters cannot be parsed as a
-        float) are stored as NaN.
+        Altimeter distance at the ALTI sample rate, dim `time`, var `dst`
+        (m). Unreadable readings (where the 8 characters cannot be parsed
+        as a float) are stored as NaN, as are readings whose timestamp
+        lies outside the datetime64[ns] range (time NaT).
 
     Notes
     -----
     The frame layout is unverified against real ALTI bytes; no ALTI frames
     have been found in any sampled MOTIVE modraw file.
     """
-    times = []
     distances = []
-
     for packet in packets:
-        # Convert timestamp from milliseconds to datetime64[ns]
-        time_ns = np.datetime64(packet.timestamp_ms, "ms").astype("datetime64[ns]")
-        times.append(time_ns)
-
         # Try to convert the length_field (8 ASCII characters) to float
         try:
             reading_float = float(packet.length_field)
@@ -60,8 +58,7 @@ def decode_alti(packets: list[Packet]) -> xr.Dataset:
         distance = reading_float * 1e-5 * 1500
         distances.append(distance)
 
-    # Create xarray Dataset with time coordinate and dst variable
-    times_array = np.array(times, dtype="datetime64[ns]")
+    times_array = ms_to_datetime(np.array([p.timestamp_ms for p in packets], dtype="uint64"))
     distances_array = np.array(distances, dtype=float)
 
     ds = xr.Dataset(
@@ -73,9 +70,8 @@ def decode_alti(packets: list[Packet]) -> xr.Dataset:
     ds.dst.attrs = dict(
         units="m",
         long_name="altimeter distance",
-        comment="Assumes 1500 m/s sound speed per Matlab v4 implementation. "
-                "Frame layout is unverified against real bytes; no ALTI frames "
-                "found in sampled MOTIVE modraw files."
+        comment="Reading x 1e-5 s x 1500 m/s, no factor 1/2, as in the Matlab "
+                "reader. Frame layout unverified against real bytes."
     )
 
     return ds

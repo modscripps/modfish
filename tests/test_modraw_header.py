@@ -16,8 +16,8 @@ from modfish.modraw.header import (
 
 @pytest.fixture
 def fixture_packets(rootdir):
-    # Frame the FULL file: read_body swallows SOM3/DCAL (header-boundary
-    # caveat documented in framer.py's module docstring).
+    # Frame the whole file: SOM3/DCAL sit before the declared header end
+    # (see framer.py's module docstring).
     packets, _ = frame((rootdir / "data/FCTD_modraw_excerpt.modraw").read_bytes())
     return packets
 

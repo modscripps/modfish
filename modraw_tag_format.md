@@ -57,7 +57,7 @@ Two more blocks are metadata, read once per file (not repeating data records):
 | hex length | 21 | 8 | hex byte-count of DATA (exceptions: `ALTI`/`ISAP`, see below) |
 | header checksum | 29 | 3 | `*` + 2 hex digits - checksum of the header fields only |
 | DATA | 32 | per hex length | tag-specific payload, see table below |
-| trailing checksum | end - 5 | 5 | `*` + 2 hex digits + `\r\n` - checksum of the whole block |
+| trailing checksum | end - 5 | 5 | `*` + 2 hex digits + `\r\n` - XOR of the DATA payload bytes |
 
 This shared layout is built once into a `tag` struct in `mod_som_read_epsi_files_v4.m` (lines 104-139) and reused for every tag in this family - that's why one parsing helper covers all of them.
 
@@ -71,7 +71,7 @@ This shared layout is built once into a `tag` struct in `mod_som_read_epsi_files
 | `EFE4` | Shear probes, FP07 thermistors, accelerometers (raw ADC) | 320 Hz (7-ch epsi) or 160 Hz (3-ch FCTD); MOTIVE 2025 FCTD files run 7 channels at ~320 Hz instead (`t1 t2 f1 c1 a1 a2 a3`, all unipolar) - the 160 Hz/3-channel case does not hold for them | 80 | Repeating elements: 8-byte little-endian timestamp + 3 bytes/channel x (7 or 3 channels), 24-bit big-endian ADC counts per channel |
 | `SB49` | SBE49 CTD | 16 Hz | `Meta_Data.CTD.sample_per_record` | Repeating records: 16 hex-char timestamp + 24 ASCII-hex chars = `T_raw`(6) `C_raw`(6) `P_raw`(6) `PT_raw`(4), raw engineering counts (needs `$DCAL` or a `.cal` file to convert to T/C/P) |
 | `SB41` | SBE41 CTD (e.g. APEX float) | 1 Hz | `Meta_Data.CTD.sample_per_record` | Repeating records: 16 hex-char timestamp + 28 ASCII chars = comma-separated `P,T,S` decimal text (already engineering units, no cal needed; `C` is not transmitted, comes back `NaN`) |
-| `ALTI` | MOD altimeter board | on demand, 1 value/block | 1 | **Exception, unverified against real bytes (see note below):** the "hex length" field isn't a length - it holds the raw distance reading as ASCII text (units of 10 µs of round-trip time), converted via `x * 1e-5 s * 1500 m/s` sound speed. DATA payload after the header is empty; the frame ends right at the header checksum's `*hh\r\n`, with no separate trailing checksum field. |
+| `ALTI` | MOD altimeter board | on demand, 1 value/block | 1 | **Exception, unverified against real bytes (see note below):** the "hex length" field isn't a length - it holds the raw distance reading as ASCII text (units of 10 µs), converted via `x * 1e-5 s * 1500 m/s` sound speed with no factor 1/2, as the Matlab reader does; whether the reading is one-way or round-trip time is unverified. DATA payload after the header is empty; the frame ends right at the header checksum's `*hh\r\n`, with no separate trailing checksum field. |
 | `ISAP` | ISA500 altimeter board | on demand, 1 value/block | 1 | Similar exception to `ALTI` - distance comes back directly in meters as ASCII text, read from a slightly nonstandard offset past the normal header (treat it as "everything after the header, as text") |
 | `ACTU` | Actuator | - | - | Tag is matched and counted, but `v4` does not currently decode a payload (`act` always returns `[]`) |
 | `SEGM` | Onboard raw time-segment (firmware-computed) | 320 Hz, NFFT=2048 samples/segment | 1 segment/block | 8-byte timestamp + 3 channels (`t1_volt`, `s1_volt`, `a3_g`) x 2048 samples, each sample a 4-byte little-endian IEEE-754 float |

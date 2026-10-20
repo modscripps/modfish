@@ -3,13 +3,13 @@ import pytest
 
 from modfish.modraw.ecop import decode_ecop
 from modfish.modraw.framer import frame
-from modfish.modraw.header import read_body
 
 
 @pytest.fixture
 def ecop_packets(rootdir):
-    # Full file bytes: read_body swallows the earliest ECOP blocks, and the
-    # hand-verified first record below is the file's true first ECOP.
+    # Full file bytes: the part past the declared header misses the earliest
+    # ECOP blocks, and the hand-verified first record below is the file's
+    # true first ECOP.
     packets, _ = frame((rootdir / "data/FCTD_modraw_excerpt.modraw").read_bytes())
     return [p for p in packets if p.tag == "ECOP"]
 

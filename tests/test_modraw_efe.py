@@ -5,12 +5,12 @@ import pytest
 
 from modfish.modraw.efe import decode_efe4
 from modfish.modraw.framer import frame
-from modfish.modraw.header import parse_som3, read_body
+from modfish.modraw.header import parse_som3
 
 
 @pytest.fixture
 def efe_setup(rootdir):
-    # Full file bytes: read_body swallows SOM3 and early EFE4 blocks.
+    # Full file bytes: SOM3 and early EFE4 blocks sit before the declared header end.
     packets, _ = frame((rootdir / "data/FCTD_modraw_excerpt.modraw").read_bytes())
     meta = parse_som3(next(p for p in packets if p.tag == "SOM3").payload)
     return [p for p in packets if p.tag == "EFE4"], meta

@@ -50,37 +50,32 @@ tree["ctd"].ds.p.plot()
 
 `read()` stamps scan-level counters onto `tree.attrs`: `n_frames`,
 `n_resync`, `n_bad_checksum`, and one `n_blocks_<TAG>` per tag found.
-`n_resync` counts bytes skipped while hunting for the next valid frame, not
+`n_resync` counts `$` anchors that did not start a valid frame, not
 corruption: a whole-file scan runs into every interleaved NMEA sentence and
-header text line, none of which are SOM frames, and the scanner correctly
-skips past them. Judge file health from `n_bad_checksum` and each decoder's
-own `n_bad_length` (on the per-group dataset's `attrs`), not from
-`n_resync`.
+header text line, none of which are SOM frames. Judge file health from
+`n_bad_checksum` and each group's own drop counts (`n_bad_checksum`,
+`n_bad_length`, `n_bad_time` in the group's `attrs`), not from `n_resync`.
+Packets with a bad checksum are dropped by the decoders. A decoder that
+fails on its stream leaves its group out with a warning; the rest of the
+file is still read.
 
 This module follows
 `MOD_fish_lib/EPSILOMETER/epsilib/mod_som_read_epsi_files_v4.m`, including
 its SBE49 calibration polynomials, and adds a per-block checksum check the
-Matlab reader does not do. See `modraw_tag_format.md` for the full tag
-reference this implementation is built from.
+Matlab reader does not do. The full tag reference this implementation is
+built from is `modraw_tag_format.md` in the repository root.
 """
 
-from .header import read_header, read_body, header_setup, sbe49_cal
-from .sb49 import sbe49_to_physical, load_ctd, load_ctd_time_series
-from .gps import load_gps_time
-from .framer import block_counts
+from .header import read_header, header_setup, sbe49_cal
+from .sb49 import sbe49_to_physical
 from .reader import read
 from .convert import convert
 
 __all__ = [
     "read_header",
-    "read_body",
     "header_setup",
     "sbe49_cal",
     "sbe49_to_physical",
-    "load_ctd",
-    "load_ctd_time_series",
-    "load_gps_time",
-    "block_counts",
     "read",
     "convert",
 ]
