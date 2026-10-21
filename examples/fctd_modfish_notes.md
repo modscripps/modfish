@@ -41,13 +41,16 @@ dbar in pressure, at the level of which samples land in which 0.5 m bin
 
 Each of these is cheap to fix in Matlab.
 
-- **Salinity temperature scale.** `MOD_fish_lib` bundles its own `seawater/sw_sals.m`, which
-  passes the ITS-90 temperature into PSS-78 without the 1.00024 conversion to IPTS-68. When
-  that copy is first on the Matlab path, salinity comes out high. On 2025 d07 the offset is
-  positive at every grid point, median +0.00159. It grows with temperature, from +0.00115 at 3
-  to 6 °C to +0.00458 at 22 to 27 °C. Fix: call `sw_salt` with `T*1.00024`, or use GSW
-  `gsw_SP_from_C(C*10, T, P)`, which takes ITS-90 directly. The 2024 MOTIVE run had a
-  seawater 3.3 copy first on the path and did not have the error.
+- **Salinity temperature scale.** `FastCTD_GridData` passes the SBE49's ITS-90 temperature to
+  `sw_salt`. `FastCTD_MATLAB/seawater` bundles the SEAWATER 2.0.1 library (`sw_salt.m` and
+  `sw_sals.m` revision 1.3, 1994), which documents its temperature input as IPTS-68 and applies
+  no conversion. When that copy is first on the Matlab path, salinity comes out high. On 2025
+  d07 the offset is positive at every grid point, median +0.00159. It grows with temperature,
+  from +0.00115 at 3 to 6 °C to +0.00458 at 22 to 27 °C. The 2024 MOTIVE run had a SEAWATER
+  3.3 copy first on the path, which converts ITS-90 internally, and did not have the error.
+  The right fix depends on which `sw_salt` resolves. `gsw_SP_from_C(C*10, T, P)` takes ITS-90
+  and is correct in both cases. So is removing the bundled copy in favor of SEAWATER 3.3.
+  Passing `T*1.00024` fixes the bundled 2.0.1 copy only and converts twice under 3.3.
 - **Depth latitude.** The 2024 gridder set depth with `sw_dpth(p, 20)` at a deployment near
   0.73 °N, which shifted depth by 0.65 m at 1046 m. On `master`, `make_FCTDall_L0` uses the
   deployment mean latitude and falls back to a silent `LAT = 30` when there is no GPS. Fix:
@@ -61,11 +64,10 @@ Each of these is cheap to fix in Matlab.
   those casts are spurious (figure 1). The 10 dbar range check in `FastCTD_GridData` keeps
   them, because the jump is inside their pressure range. Fix: split the record at gaps before
   smoothing (section 2.4).
-- **Grid edges and skipped casts.** `bindata` clamps samples outside the depth axis into the
-  first and last bin, which piles out-of-range water into the edge bins. The validation notes
-  also list casts skipped by the gridder as zero columns. Neither MOTIVE deployment reached the
-  2000 m grid edge, so clamping was not tested there. Fix: drop out-of-range samples and leave
-  empty bins and skipped casts NaN.
+- **Grid edge clamping.** `bindata` clamps samples outside the depth axis into the first and
+  last bin, which piles out-of-range water into the edge bins. Neither MOTIVE deployment
+  reached the 2000 m grid edge, so clamping was not tested there. Fix: drop out-of-range
+  samples.
 - **Downcast coefficients on upcasts.** The legacy response matching ("San's code") loads
   `GainPFit_Dn` and `PhsPFit_Dn` from `FCTD_SalinityCorrectionFactors_toCond.mat` and uses them
   for every cast. `GainPFit_Up` and `PhsPFit_Up` are never read. This shaped the 2024 MOTIVE
@@ -252,7 +254,7 @@ port it.
 | depth latitude | yes | use the GPS latitude, warn when missing |
 | cast detection at gaps | yes | split at gaps over 16 s before smoothing |
 | restart records | yes | drop misstamped and stale samples on read |
-| grid edges, NaN columns | yes | affects real-time sections |
+| grid edge clamping | yes | affects real-time sections |
 | T-C low-pass and response | yes, per block | fit after the first deep down/up pairs; leave off until then |
 | thermal mass | yes | causal recursion, per sample |
 | chi gain | yes | fit per probe after the first deep down casts; the largest chi error |
@@ -479,9 +481,9 @@ chain with the scalar thermal mass of 2026-09 (`lowpass` 5 Hz, `lag` 0.03 s, `ta
 2026-09-29. Each down cast is paired with the up cast that follows it. Both are averaged in
 0.05 °C temperature bins deeper than 50 dbar. Only bins both fill enter. Left and middle:
 pair-averaged down and up profiles before and after. Right: their difference. Morison's mean
-absolute separation falls from 0.03509 to 0.00909 on d09 (70 pairs) and from 0.02192 to 0.00855
-on d12 (26 pairs). The pair-mean signed difference goes from -0.0400 to +0.0018 on d09 and from
--0.0210 to +0.0091 on d12. Uncorrected, the down casts read fresher through the thermocline.
+absolute separation falls from 0.03509 to 0.00916 on d09 (70 pairs) and from 0.02192 to 0.00870
+on d12 (26 pairs). The pair-mean signed difference goes from -0.0400 to +0.0023 on d09 and from
+-0.0210 to +0.0095 on d12. Uncorrected, the down casts read fresher through the thermocline.
 The response step reverses that sign. The thermal-mass step removes most of the rest.
 (motive-cruise-proc drafts/06.)
 
@@ -549,16 +551,20 @@ than an order of magnitude below the old bench value at low frequency. (motive-c
 products, at `min_bins` 4 (before the change to 3). Bits are not exclusive. Noise-dominated
 windows (bit 2) reach 0.41, 0.33 and 0.30 on d07s2, d07s4 and d07s6, the three FCTD2
 (SBE49 0664) segments. Slow windows (bit 1) reach 0.35 to 0.43 on d06, d08,
-d10 and d11. Bit 2 excludes nothing from the grid, bit 1 does. (motive-cruise-proc drafts/13.)
+d10 and d11. Bit 2 excludes nothing from the grid, bit 1 does. The d11 and d07s5 chi products
+were later withdrawn (chi disabled in the motive-cruise-proc `config.yml`). (motive-cruise-proc
+drafts/13.)
 
 ### Section
 
-![Gridded section of 2025 d11](figures/fctd_section_25_1211_d11_deep_station_A.png)
+![Gridded section of 2025 d12, station A](figures/fctd_section_25_1211_d12_deep_station_A.png)
 
-**Figure 8.** Grid product of `25_1211_d11_deep_station_A`, FCTD2 with SBE49 0664, 3 casts
-(down and up) from 2025-12-11 00:52 to 01:00 UTC. x axis cast time. Conservative temperature,
-absolute salinity and `sgth0` on the 0.5 m grid, one column per cast. One cast spans under
-50 m and shows gray. One profile, ended near 1000 dbar when communication with the fish failed.
-The fish fell at about 2 dbar/s, slower than on the other records (about 3.4). No chi group:
-the microconductivity signal on this record is dominated by noise. (motive-cruise-proc
-drafts/48.)
+**Figure 8.** Grid product of `25_1211_d12_deep_station_A`, FCTD1 with SBE49 0537, 639 casts
+(down and up) from 2025-12-11 03:35 to 2025-12-14 07:47 UTC, 76.2 h at a median cast interval
+of 6.7 min, stationary at MOTIVE station A. x axis cast time. From top: conservative
+temperature, absolute salinity, `sgth0`, log10 `chi` and log10 `eps_chi` on the 0.5 m grid,
+one column per cast. 26 casts span under 50 m and show as gray columns. Two gaps wider than
+five median cast spacings are blanked. Deepest data 2041 m. The depth axis stops at 1383 m,
+which hides the lower part of 4 casts. Chi gain 9.3 S/m per V, fitted on 300 of 309 down casts.
+Chi is finite on 54.1 % of the cells holding CT. The PNG is reduced to 256 colors for size.
+(motive-cruise-proc drafts/48.)
