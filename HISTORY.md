@@ -1,6 +1,6 @@
 # History
 
-## unreleased
+## 2026.10.0
 
 ### New Features
 -   `modfish.fctd.depth_edges` (formerly the private `grid._depth_edges`,

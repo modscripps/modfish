@@ -974,7 +974,7 @@ wheels = [
 
 [[package]]
 name = "modfish"
-version = "2025.10.0"
+version = "2026.10.0"
 source = { editable = "." }
 dependencies = [
     { name = "gsw", version = "3.6.20", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
