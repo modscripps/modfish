@@ -173,3 +173,30 @@ def test_chi_group_carries_window_direction(l1_and_files):
     for cid, d in zip(casts.cast.values, casts.direction.values, strict=True):
         assert np.all(chi.direction.values[chi.cast.values == cid] == d)
     assert {"down", "up"} <= set(np.unique(chi.direction.values.astype(str)))
+
+
+def test_closure_with_two_segment_lengths_matches_each_group_alone():
+    # ranges at different rates have different Welch segment lengths and
+    # get their own BandResponse; the windows come back in input order
+    from modfish.chi.batchelor import BandResponse
+    from modfish.chi.closure import closure
+    from modfish.chi.pipeline import _closure
+
+    params = ChiParams(enabled=True, gain=50.0)
+    n = 6
+    time = np.datetime64("2025-12-06") + np.arange(n) * np.timedelta64(1, "s")
+    strat = xr.Dataset(
+        dict(n2=("time", np.full(n, 1e-5)), alpha=("time", np.full(n, 2e-4)),
+             Rrho=("time", np.full(n, 10.0))),
+        coords=dict(time=time))
+    chi = np.array([1e-9, 1e-8, np.nan, 1e-9, 1e-8, 1e-10])
+    spd = np.array([0.6, 1.0, np.nan, 0.8, 1.4, 1.1])
+    fs = np.array([325.52, 160.0, 325.52, 160.0, 325.52, 160.0])
+    out = _closure(chi, spd, fs, strat, params)
+    for rate in (325.52, 160.0):
+        idx = np.flatnonzero(fs == rate)
+        table = BandResponse.build(params, rate, np.nanmax(spd[idx]))
+        alone = closure(chi[idx], spd[idx], fs[idx], strat.isel(time=idx), params, table)
+        for name in ("eps_chi", "r", "chi_tot", "flag"):
+            np.testing.assert_array_equal(out[name].values[idx], alone[name].values)
+    assert np.isnan(out["r"].values[2])

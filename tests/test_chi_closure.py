@@ -2,16 +2,17 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from modfish.chi.batchelor import FractionTable, band_fraction
+from modfish.chi.batchelor import BandResponse
 from modfish.chi.closure import closure, solve_epsilon, stratification
 from modfish.chi.config import FLAG_N2, FLAG_RCLIP, FLAG_RRHO, ChiParams
 
 P = ChiParams(enabled=True, gain=50.0)
+FS = 325.52
 
 
 @pytest.fixture(scope="module")
 def table():
-    return FractionTable.build(1.0, 16.67, P.nu, P.D, P.q)
+    return BandResponse.build(P, FS, 2.0)
 
 
 def _ctd(minutes=5.0, fs=16.0, tz=-0.01, sz=0.0):
@@ -52,28 +53,32 @@ def test_stratification_negative_n2_when_inverted():
 
 def test_solve_epsilon_matches_fixed_point(table):
     chi_pe_hat = np.array([1e-10, 1e-9, 1e-8])
-    kmax = np.full(3, 12.5)
-    eps, r, clipped = solve_epsilon(chi_pe_hat, kmax, table, P.gamma)
+    eps, r, clipped = solve_epsilon(chi_pe_hat, np.full(3, 1.0), np.full(3, FS), table, P.gamma)
+    col = table.r_of(1.0, FS)
+
+    def r_at(e):
+        return np.interp(np.log10(e), np.log10(table.eps_grid), col)
+
     for x, e, rr in zip(chi_pe_hat, eps, r):
         e_fp = 1e-9
         for _ in range(60):
-            e_fp = x / (2 * P.gamma * band_fraction(e_fp, 1.0, 12.5, P.nu, P.D, P.q))
+            e_fp = x / (2 * P.gamma * r_at(e_fp))
         assert e == pytest.approx(e_fp, rel=0.02)
-        assert rr == pytest.approx(band_fraction(e_fp, 1.0, 12.5, P.nu, P.D, P.q), rel=0.02)
+        assert rr == pytest.approx(r_at(e_fp), rel=0.02)
         assert 2 * P.gamma * e * rr == pytest.approx(x, rel=0.02)
     assert not clipped.any()
 
 
 def test_solve_epsilon_clips_and_handles_nan(table):
-    eps, r, clipped = solve_epsilon(np.array([1e-16, np.nan, -1.0]), np.full(3, 12.5), table, P.gamma)
-    assert clipped[0] and r[0] == pytest.approx(table.r_of(12.5)[0]) and eps[0] == table.eps_grid[0]
+    eps, r, clipped = solve_epsilon(np.array([1e-16, np.nan, -1.0]), np.full(3, 1.0), np.full(3, FS), table, P.gamma)
+    assert clipped[0] and r[0] == pytest.approx(table.r_of(1.0, FS)[0]) and eps[0] == table.eps_grid[0]
     assert np.isnan(eps[1:]).all() and np.isnan(r[1:]).all()
 
 
 def test_solve_epsilon_above_table_is_nan_and_clipped(table):
-    r_col = table.r_of(12.5)
+    r_col = table.r_of(1.0, FS)
     g_last = 2 * P.gamma * table.eps_grid[-1] * r_col[-1]
-    eps, r, clipped = solve_epsilon(np.array([1e3 * g_last]), np.full(1, 12.5), table, P.gamma)
+    eps, r, clipped = solve_epsilon(np.array([1e3 * g_last]), np.full(1, 1.0), np.full(1, FS), table, P.gamma)
     assert clipped[0]
     assert np.isnan(eps[0]) and np.isnan(r[0])
 
@@ -83,30 +88,31 @@ def test_closure_outputs_and_flags(table):
     centers = ctd.time.values[16 * 60 : 16 * 240 : 16 * 10]
     strat = stratification(ctd, centers, P)
     chi = np.full(centers.size, 6e-11)
-    kmax = np.full(centers.size, 12.5)
-    out = closure(chi, kmax, strat, P, table)
+    spd = np.full(centers.size, 1.0)
+    fs = np.full(centers.size, FS)
+    out = closure(chi, spd, fs, strat, P, table)
     assert set(out.data_vars) >= {"chi_pe", "eps_chi", "r", "chi_tot", "flag"}
     assert np.all(out.chi_tot.values >= chi)
     assert np.all(out.r.values <= 1.0) and np.all(out.r.values > 0)
     assert np.isfinite(out.eps_chi.values).all()
     # inverted stratification: NaN with the n2 flag
     strat_inv = stratification(_ctd(tz=+0.05), centers, P)
-    out = closure(chi, kmax, strat_inv, P, table)
+    out = closure(chi, spd, fs, strat_inv, P, table)
     assert np.isnan(out.eps_chi.values).all() and np.all(out.flag.values & FLAG_N2)
     # Rrho near zero caps the factor
     strat_cap = strat.copy()
     strat_cap["Rrho"] = ("time", np.full(centers.size, 0.1))
-    out = closure(chi, kmax, strat_cap, P, table)
+    out = closure(chi, spd, fs, strat_cap, P, table)
     assert np.all(out.flag.values & FLAG_RRHO)
     assert np.all(out.chi_pe.values == pytest.approx(
         (P.g * strat.alpha.values) ** 2 * chi / strat.n2.values * P.rrho_factor_max))
     # tiny chi_pe: r clipped at the table's own floor value
-    out = closure(np.full(centers.size, 1e-20), kmax, strat, P, table)
+    out = closure(np.full(centers.size, 1e-20), spd, fs, strat, P, table)
     assert np.all(out.flag.values & FLAG_RCLIP)
-    assert np.all(out.r.values == pytest.approx(table.r_of(12.5)[0]))
+    assert np.all(out.r.values == pytest.approx(table.r_of(1.0, FS)[0]))
     # huge chi_pe: above the table, eps_chi and chi_tot are NaN, flagged
     huge_chi = chi * 1e6
-    out = closure(huge_chi, kmax, strat, P, table)
+    out = closure(huge_chi, spd, fs, strat, P, table)
     assert np.all(out.flag.values & FLAG_RCLIP)
     assert np.isnan(out.eps_chi.values).all() and np.isnan(out.chi_tot.values).all()
 
@@ -116,13 +122,14 @@ def test_closure_nan_rrho_stays_nan_unflagged(table):
     centers = ctd.time.values[16 * 60 : 16 * 240 : 16 * 10]
     strat = stratification(ctd, centers, P)
     chi = np.full(centers.size, 6e-11)
-    kmax = np.full(centers.size, 12.5)
+    spd = np.full(centers.size, 1.0)
+    fs = np.full(centers.size, FS)
     strat_mixed = strat.copy()
     Rrho = strat.Rrho.values.copy()
     Rrho[0] = np.nan
     Rrho[1] = 0.0
     strat_mixed["Rrho"] = ("time", Rrho)
-    out = closure(chi, kmax, strat_mixed, P, table)
+    out = closure(chi, spd, fs, strat_mixed, P, table)
     assert np.isnan(out.chi_pe.values[0])
     assert np.isnan(out.eps_chi.values[0])
     assert np.isnan(out.chi_tot.values[0])
@@ -138,11 +145,12 @@ def test_chi_pe_scales_as_alpha_squared(table):
     centers = ctd.time.values[16 * 60 : 16 * 240 : 16 * 10]
     strat = stratification(ctd, centers, P)
     chi = np.full(centers.size, 6e-11)
-    kmax = np.full(centers.size, 12.5)
-    base = closure(chi, kmax, strat, P, table)
+    spd = np.full(centers.size, 1.0)
+    fs = np.full(centers.size, FS)
+    base = closure(chi, spd, fs, strat, P, table)
     strat2 = strat.copy()
     strat2["alpha"] = ("time", 2.0 * strat["alpha"].values)
-    doubled = closure(chi, kmax, strat2, P, table)
+    doubled = closure(chi, spd, fs, strat2, P, table)
     assert np.isfinite(base.chi_pe.values).all()
     assert doubled.chi_pe.values == pytest.approx(4.0 * base.chi_pe.values, rel=1e-12)
 
@@ -186,7 +194,7 @@ def test_nan_n2_is_not_flagged_as_inverted(table):
     strat = strat.copy()
     strat["n2"] = ("time", n2)
     chi = np.full(centers.size, 6e-11)
-    out = closure(chi, np.full(centers.size, 12.5), strat, P, table)
+    out = closure(chi, np.full(centers.size, 1.0), np.full(centers.size, FS), strat, P, table)
     assert out.flag.values[0] == 0
     assert np.isnan(out.chi_pe.values[0]) and np.isnan(out.eps_chi.values[0])
     assert out.flag.values[1] & FLAG_N2
@@ -200,6 +208,6 @@ def test_n2_flag_only_on_windows_with_an_estimate(table):
     strat = stratification(ctd, centers, P)
     chi = np.full(centers.size, 6e-11)
     chi[:3] = np.nan
-    out = closure(chi, np.full(centers.size, 12.5), strat, P, table)
+    out = closure(chi, np.full(centers.size, 1.0), np.full(centers.size, FS), strat, P, table)
     assert np.all(out.flag.values[:3] & FLAG_N2 == 0)
     assert np.all(out.flag.values[3:] & FLAG_N2)

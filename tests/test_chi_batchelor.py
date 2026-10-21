@@ -1,7 +1,9 @@
 import numpy as np
 import pytest
 
-from modfish.chi.batchelor import FractionTable, band_fraction, spectrum
+from modfish.chi.batchelor import BandResponse, band_fraction, spectrum, welch_kernels
+from modfish.chi.config import ChiParams
+from modfish.chi.spectra import band_kmax, integrate, spectral_factor, window_spectrum
 
 NU, D, Q = 1.3e-6, 1.4e-7, 3.7
 
@@ -44,43 +46,74 @@ def test_band_fraction_widens_with_kmax_and_falls_with_eps():
     assert band_fraction(1e-9, 1.0, 12.5, NU, D, Q) > band_fraction(1e-8, 1.0, 12.5, NU, D, Q)
 
 
-def test_fraction_table_reproduces_direct_integration():
-    tab = FractionTable.build(kmin=1.0, kmax_max=16.67, nu=NU, D=D, q=Q)
-    assert tab.r.shape == (tab.eps_grid.size, tab.kmax_grid.size)
-    col = tab.r_of(12.5)
-    i = np.searchsorted(tab.eps_grid, 1e-8)
-    assert col[i] == pytest.approx(band_fraction(tab.eps_grid[i], 1.0, 12.5, NU, D, Q), rel=1e-3)
-    # interpolated column between grid points
-    mid = 0.5 * (tab.kmax_grid[3] + tab.kmax_grid[4])
-    assert np.all(tab.r_of(mid) <= tab.r_of(tab.kmax_grid[4]))
-    assert np.all(tab.r_of(mid) >= tab.r_of(tab.kmax_grid[3]))
+FS = 325.52
 
 
-def test_fraction_table_monotone_in_eps():
-    tab = FractionTable.build(kmin=1.0, kmax_max=12.5, nu=NU, D=D, q=Q)
-    col = tab.r_of(12.5)
-    # At eps = 1e-12 about 6 % of the variance sits below kmin = 1 cpm and under 1 %
-    # above 12.5 cpm, so r peaks one grid step in (0.9351, 0.9368, 0.9363, ...) and
-    # falls monotonically from there. g(eps) = 2 gamma eps r stays strictly increasing.
+def test_welch_kernels_pass_white_noise_above_the_lowest_bin():
+    # a white spectrum comes back at its level, except bin 1, where the
+    # per-segment linear detrend removes about a quarter of the power
+    f, f_bins, K = welch_kernels(FS, 0.5)
+    df = f[1] - f[0]
+    gain = K.sum(axis=1) * df
+    assert gain[1] == pytest.approx(0.73, abs=0.01)
+    band = f_bins < 50.0  # fmax_cap
+    assert np.allclose(gain[2:][band[2:]], 1.0, atol=2e-3)
+    assert f_bins[1] == pytest.approx(FS / round(0.5 * FS))
+
+
+@pytest.fixture(scope="module")
+def response():
+    return BandResponse.build(ChiParams(gain=1.0), FS, spd_max=2.0)
+
+
+@pytest.mark.parametrize("spd", [0.5, 0.61, 0.75, 1.0, 1.25, FS / 163, 1.9973])
+def test_band_response_sums_the_bins_integrate_sums(response, spd):
+    params = ChiParams(gain=1.0)
+    f, _ = window_spectrum(np.zeros(4 * round(0.5 * FS)), FS, params.nsec)
+    k = f / spd
+    expected = np.flatnonzero((k > params.kmin) & (k < band_kmax(spd, params)))
+    assert np.array_equal(response.band_bins(spd, FS), expected)
+
+
+@pytest.mark.parametrize("spd", [0.5, 1.0, 1.9])
+def test_band_response_has_one_peak_and_invertible_closure(response, spd):
+    # r rises while the Batchelor peak moves into the band and falls once
+    # it moves past kmax; solve_epsilon needs eps * r strictly increasing
+    col = response.r_of(spd, FS)
     i = int(col.argmax())
-    assert i <= 2
+    assert np.all(np.diff(col[: i + 1]) >= 0)
     assert np.all(np.diff(col[i:]) <= 0)
-    assert col[0] > 0.9
+    assert np.all(np.diff(response.eps_grid * col) > 0)
+    assert np.all((col > 0) & (col < 1))
 
 
-def test_pipeline_table_resolves_the_band_edge_above_the_cap():
-    """`integrate` returns `k_last + dk/2`, up to half a Welch bin above
-    `kmax_cap`, so the pipeline's table must resolve that instead of
-    clamping `r_of` back to the cap."""
-    from modfish.chi.config import ChiParams
-    from modfish.chi.pipeline import _fraction_table
+def test_band_response_interpolates_in_spd(response):
+    # an off-grid speed against a table built on a grid through it
+    exact = BandResponse.build(ChiParams(gain=1.0), FS, spd_max=2.0, spd_min=0.913)
+    assert response.r_of(0.913, FS) == pytest.approx(exact.r_of(0.913, FS), rel=1e-3)
 
-    params = ChiParams(enabled=True, gain=50.0)
-    table = _fraction_table(params)
-    assert table.kmax_grid[-1] == pytest.approx(
-        params.kmax_cap + 0.5 / (params.nsec * params.min_spd))
-    assert np.diff(table.kmax_grid).max() == pytest.approx(0.5, abs=0.05)
-    edge = table.r_of(12.77)
-    cap = table.r_of(12.5)
-    assert not np.allclose(edge, cap)
-    assert np.all(edge > cap)
+
+@pytest.mark.parametrize("ieps, spd", [(20, 0.5), (40, 0.75), (60, 1.6)])
+def test_band_response_matches_the_welch_band_sum(response, ieps, spd):
+    """`r` must be the fraction of chi the band sum of a Welch estimate
+    recovers. Synthetic c1 with the Batchelor spectrum pushed back through
+    the acquisition factor, then `window_spectrum` and `integrate`, as
+    `run_range` does. The exact Batchelor integral over the band was 10 %
+    above the band sum at eps 1e-10 and 0.5 m/s."""
+    params = ChiParams(gain=1.0)
+    eps = response.eps_grid[ieps]
+    n = 2**21
+    rng = np.random.default_rng(ieps)
+    fn = np.fft.rfftfreq(n, 1 / FS)[1:]
+    S = np.zeros(n // 2 + 1)
+    S[1:] = (6 * params.D * spectrum(fn / spd, eps, 1.0, params.nu, params.D, params.q)
+             / spectral_factor(fn, FS, spd, params))
+    X = np.sqrt(S * FS * n / 4) * (rng.standard_normal(S.size)
+                                     + 1j * rng.standard_normal(S.size))
+    x = np.fft.irfft(X, n)
+    f, Pf = window_spectrum(x, FS, params.nsec)
+    Pk = Pf.copy()
+    Pk[1:] *= spectral_factor(f[1:], FS, spd, params)
+    r_act = integrate(f / spd, Pk, None, params.kmin, band_kmax(spd, params),
+                      1.0, 1 / 6)[0]
+    assert response.r_of(spd, FS)[ieps] == pytest.approx(r_act, rel=0.015)
