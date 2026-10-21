@@ -23,8 +23,8 @@ def fixture_packets(rootdir):
 
 
 def test_parse_som3_fctd_channel_setup(fixture_packets):
-    # Expected values byte-verified against the fixture's SOM3 block during
-    # planning (EFE4 submodule at payload offset 180, size 468).
+    # Expected values read off the fixture's SOM3 block bytes (EFE4 tag at
+    # payload offset 180, submodule size 468).
     som3 = next(p for p in fixture_packets if p.tag == "SOM3")
     meta = parse_som3(som3.payload)
     assert meta["n_channels"] == 7
@@ -46,7 +46,7 @@ def test_parse_dcal_matches_header_cal(fixture_packets, rootdir):
 def test_parse_dcal_all_coefficients_present(fixture_packets):
     # The $DCAL block spells conductivity coefficients as G/H/I/J rather than
     # the header's CG/CH/CI/CJ; parse_dcal must normalize to the sbe49_cal
-    # key set. Values below are read off the raw DCAL text during planning.
+    # key set. Values below are read off the fixture's raw DCAL text.
     dcal = next(p for p in fixture_packets if p.tag == "DCAL")
     cal = parse_dcal(dcal.payload)
     assert cal["ta0"] == pytest.approx(7.906934e-04)
@@ -74,13 +74,8 @@ def test_parse_dcal_all_coefficients_present(fixture_packets):
 
 
 def test_header_setup_2025_format_serialnum():
-    # Exact line copied from FCTD25_12_08_133647.modraw (skq202521s cruise,
-    # server mount /mnt/mod-server/MOTIVE/Cruises/skq202521s/05_processed_data
-    # /25_1208_d08_motiveb/raw/), the 2025 header format notebook 04 found
-    # serialnum missing for downstream. header_setup itself matches this
-    # line correctly (single-quoted, no space before `=`); the L0 defect is
-    # in reader.read() not stamping header_setup fields onto the ctd group's
-    # own attrs, fixed separately and covered in test_modraw_reader.py.
+    # Exact line from a 2025 header (FCTD25_12_08_133647.modraw, cruise
+    # skq202521s): single-quoted value, no space before `=`.
     head = "CTD.SerialNum='0537'\n"
     setup = header_setup(head)
     assert setup["serialnum"] == "0537"
@@ -88,10 +83,10 @@ def test_header_setup_2025_format_serialnum():
 
 def test_header_setup_skips_commented_enumeration_lines():
     # 2024 (MOTIVE24, skq202417s) headers carry a commented enumeration of
-    # candidate serial numbers ahead of the active assignment, e.g. excerpt
-    # from EPSI24_11_20_135258.modraw. re.search used to return the first
-    # match, the commented mako1 line, stamping every 2024 file '0537'
-    # regardless of which instrument it came from.
+    # candidate serial numbers ahead of the active assignment (excerpt from
+    # EPSI24_11_20_135258.modraw). The commented lines must be skipped, or
+    # the first match, the commented mako1 line, gives every 2024 file
+    # serial number '0537'.
     head = (
         "CTD.vehicle='FCTD2'\n"
         "% ---- vehicle pressure case  (epsimako)\n"

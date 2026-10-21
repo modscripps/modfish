@@ -2,7 +2,7 @@
 
 The form follows `EPSILOMETER/EPSILON/process/batchelor.m` (Lien 1992) with
 `erfc` in the bracket. The resolved fraction `r(eps)` of a window replaces
-the `c eps^p` power law of Alford and Pinkel (2000): spec decision 2.
+the `c eps^p` power law of Alford and Pinkel (2000).
 `BandResponse` computes it as the fraction of the Batchelor variance that
 the window's Welch band sum recovers on average, so it includes the
 estimator's own response (window leakage, the per-segment detrend) along
@@ -31,8 +31,12 @@ def spectrum(k, eps, chi, nu, D, q):
         Dissipation rate, W/kg.
     chi : float
         Temperature variance dissipation, K^2/s.
-    nu, D, q : float
-        Kinematic viscosity, thermal diffusivity, universal constant.
+    nu : float
+        Kinematic viscosity, m^2/s.
+    D : float
+        Thermal diffusivity, m^2/s.
+    q : float
+        Universal constant, dimensionless.
 
     Returns
     -------

@@ -2,9 +2,10 @@
 FCTD post-processing pipeline: deployment-level concatenation of L0 data,
 cast detection, sensor corrections (L1), and per-cast depth gridding.
 
-Stages are pure functions (Dataset/DataTree in and out); file I/O happens
-only in `process_deployment` and in the caller. See
-`plans/2026-09-01-fctd-pipeline-design.md` for the design.
+Stages run in the order `concat_l0` -> `make_l1` -> optional `add_chi` ->
+`grid_casts`. Each stage is a pure function (Dataset/DataTree in and out).
+File I/O happens only in `concat_l0` (reading), `process_deployment`,
+`add_chi_to_products`, and the caller.
 """
 
 from modfish.chi.config import ChiParams

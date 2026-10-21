@@ -1,6 +1,6 @@
 """Power transfer functions applied to the microconductivity PSD.
 
-Each factor is applied exactly once, by name (spec decision 1). The
+Each factor is applied exactly once, by name. The
 preemphasis network follows `remove_sbe_preemphasisMHA.m` with pi in place
 of its `PI = 3.14159`; only the time constant `(R24 + R25) C19` = 1.577 s
 reaches the chi band.
@@ -39,7 +39,22 @@ def preemphasis_response(f, R24, R25, R22, C19):
 
 
 def preemphasis_inverse(f, R24, R25, R22, C19):
-    """1 / |H_pre(f)|^2, the PSD factor that removes the preemphasis."""
+    """1 / |H_pre(f)|^2, the PSD factor that removes the preemphasis.
+
+    Parameters
+    ----------
+    f : array_like
+        Frequency, Hz.
+    R24, R25, R22 : float
+        Ohm.
+    C19 : float
+        Farad.
+
+    Returns
+    -------
+    numpy.ndarray
+        Power factor, 1 at f = 0.
+    """
     return 1.0 / np.abs(preemphasis_response(f, R24, R25, R22, C19)) ** 2
 
 
@@ -72,6 +87,17 @@ def antialias(f, fs, kind):
 
 
 def derivative(k):
-    """(2 pi k)^2, the spectral derivative for `k` in cpm."""
+    """(2 pi k)^2, the PSD factor of a first derivative in space.
+
+    Parameters
+    ----------
+    k : array_like
+        Wavenumber, cpm.
+
+    Returns
+    -------
+    numpy.ndarray
+        Power factor, (rad/m)^2.
+    """
     k = np.asarray(k, dtype=float)
     return (2 * np.pi * k) ** 2

@@ -2,12 +2,9 @@
 
 Consumes the `xr.DataTree` `modfish.fctd.l1.make_l1` produces and bins each
 detected cast's `ctd` samples onto a fixed-width depth grid by bin-mean,
-producing a rectangular `(depth, cast)` product. Two Matlab bugs are fixed
-here: empty bins come out NaN rather than 0 (bug B4), and samples outside
-the configured depth range fall out of the binning naturally rather than
-being clamped into the edge bins (bug B3). See
-`plans/2026-09-01-fctd-pipeline-design.md` for the stage order and
-rationale.
+producing a rectangular `(depth, cast)` product. Two Matlab gridder bugs
+are fixed here. Empty bins come out NaN (Matlab wrote 0). Samples outside
+the grid range are dropped (Matlab clamped them into the edge bins).
 """
 
 import numpy as np
@@ -82,9 +79,9 @@ def _bin_mean(depth: np.ndarray, values: np.ndarray, edges: np.ndarray) -> np.nd
     Samples where either `depth` or `values` is NaN are masked out before
     binning, so a variable's own NaN samples never suppress a bin that
     other variables can still fill.
-    Bins with zero valid samples come out NaN rather than 0 (Matlab bug
-    B4); samples outside `edges` fall out of `np.histogram` on their own
-    rather than being clamped into the first/last bin (Matlab bug B3).
+    Bins with zero valid samples come out NaN (Matlab wrote 0). Samples
+    outside `edges` are dropped by `np.histogram` (Matlab clamped them
+    into the first/last bin).
 
     Parameters
     ----------
@@ -202,32 +199,55 @@ def grid_casts(l1: xr.DataTree, params: GridParams | None = None) -> xr.Dataset:
     Returns
     -------
     xr.Dataset
-        Dims `(depth, cast)`. Data variables: every 1-D float `ctd`
-        variable on `time` except `lon`, `lat`, and `depth` itself,
-        bin-averaged per cast (`p` included, gridded like any other
-        variable). Coordinates: `depth` (bin centers, m), `cast` (ids from
-        the `casts` group), `direction` (from `casts`), `time`/`lon`/`lat`
-        (per-cast means over that cast's samples). Attrs copied from
-        `ctd`, plus `dz`. When the tree carries a `chi` group, `chi`,
-        `chi_tot`, `eps_chi` (geometric bin means), `r`, `kmax`, `phi` (bin
-        means) and `chi_flag` (bitwise or) are added over `(depth,
-        cast)`. Windows flagged `FLAG_SLOW`, `FLAG_EMPTY` or `FLAG_RAIL`
-        are excluded from those bin means, and windows carrying a bit of
-        `params.closure_exclude_flags` also from the `chi_tot`, `eps_chi`
-        and `r` means (a railed window's chi is set
-        by the saturation: on the MOTIVE products they are 0.05 % of
-        windows and 93 % of those above 1e-5 K^2/s), but `chi_flag`'s bitwise-or still covers
-        every window, so a bin can carry those bits without them having
-        contributed to the mean. Bit 2, noise-dominated, does not exclude
-        a window from the means: a small signal is a valid estimate. The
-        gridded `chi` is censored at zero: `_bin_geomean` masks
-        non-positive values to NaN before averaging, so a negative chi
-        never reaches the gridded product even though the window-level
-        value keeps it. Within a bin, `chi` averages only the
-        non-excluded windows that are also positive, `phi` averages
-        every non-excluded window, and the gap between those two window
-        sets widens where `phi` is high, so a high `phi` in a bin is not
-        itself a statement about the windows behind that bin's `chi`.
+        Dims `(depth, cast)`.
+
+        Data variables: every 1-D float `ctd` variable on `time` except
+        `lon`, `lat` and `depth`, bin-averaged per cast (`p` included).
+        When the tree has a `chi` group, also `chi`, `chi_tot`, `eps_chi`
+        (geometric bin means), `r`, `kmax`, `phi` (bin means) and
+        `chi_flag` (bitwise or), each present in `chi`.
+
+        Coordinates: `depth` (bin centers, m, from `depth_edges`), `cast`
+        (ids from the `casts` group), `direction` (from `casts`), and
+        `time`/`lon`/`lat` (per-cast means over that cast's samples; NaT
+        or NaN for a cast without labeled samples).
+
+        Attrs: copied from `ctd`, plus `dz` and `closure_exclude_flags`.
+        With a `chi` group also `chi_gain`, `chi_gain_source`,
+        `chi_antialias`, `chi_modfish_version` and, when present,
+        `chi_modfish_commit`.
+
+    Raises
+    ------
+    ValueError
+        From `depth_edges`, if `params.depth_min` or `params.depth_max` is
+        None and no cast sample has a finite depth, or if the resulting
+        `depth_min` exceeds `depth_max`.
+
+    Notes
+    -----
+    Only samples with a cast label (`cast > 0`) set a derived depth range,
+    so deck and surface-soak samples do not stretch the grid.
+
+    Chi windows flagged `FLAG_SLOW`, `FLAG_EMPTY` or `FLAG_RAIL` are
+    excluded from every chi bin mean. Windows carrying a bit of
+    `params.closure_exclude_flags` are also excluded from the `chi_tot`,
+    `eps_chi` and `r` means. A railed window's chi is set by the
+    saturation. On the MOTIVE products railed windows are 0.05 % of
+    windows and 93 % of those above 1e-5 K^2/s. `chi_flag`'s bitwise or
+    still covers every window, so a bin can have those bits set without
+    the flagged windows having contributed to the mean. Bit 2
+    (noise-dominated) does not exclude a window from the means, since a
+    small signal is a valid estimate.
+
+    The gridded `chi` is censored at zero. `_bin_geomean` masks
+    non-positive values to NaN before averaging, so a negative chi never
+    reaches the gridded product even though the window-level value keeps
+    it. Within a bin, `chi` averages only the non-excluded windows that
+    are also positive, while `phi` averages every non-excluded window. The
+    gap between those two window sets widens where `phi` is high, so a
+    high `phi` in a bin says nothing by itself about the windows behind
+    that bin's `chi`.
     """
     if params is None:
         params = GridParams()

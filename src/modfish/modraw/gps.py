@@ -15,11 +15,9 @@ import pandas as pd
 import xarray as xr
 
 
-#: `$GPZDA,hhmmss.ss,dd,mm,yyyy`, the GPS UTC time sentence. 2024-format files
-#: (e.g. `skq202417s`) use the `$INZDA` talker prefix instead of `$GPZDA` for
-#: the same sentence (same fields, observed against
-#: EPSI24_11_26_102923.modraw), so both are accepted here, mirroring `_GGA`
-#: below which already accepted both prefixes.
+#: `$GPZDA,hhmmss.ss,dd,mm,yyyy`, the GPS UTC time sentence. MOTIVE 2024
+#: files use the `$INZDA` talker prefix for the same sentence with the same
+#: fields, so both prefixes are accepted, as in `_GGA`.
 _ZDA = re.compile(rb"\$(?:GP|IN)ZDA,(\d{6}\.\d+),(\d{2}),(\d{2}),(\d{4})")
 
 #: `$GPGGA,hhmmss.ss,ddmm.mmmm,N/S,dddmm.mmmm,E/W`, the GPS position sentence.

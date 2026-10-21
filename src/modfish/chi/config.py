@@ -21,7 +21,7 @@ FLAG_MEANINGS = (
 
 @dataclasses.dataclass
 class ChiParams:
-    """Microconductivity chi parameters, see `plans/2026-09-04-chi-design.md`.
+    """Microconductivity chi parameters.
 
     Parameters
     ----------
@@ -29,9 +29,9 @@ class ChiParams:
         Run `add_chi` in `process_deployment`.
     gain : float or None
         S/m per volt of `c1` (2.5 V full scale), the fitted product of
-        network scale and gain. The shipboard Matlab constant 22 and the
-        review's per-cast fits are per normalized ADC fraction; divide
-        those by 2.5 for this scale. Required when enabled; no default so
+        network scale and gain. The shipboard Matlab constant 22 is per
+        normalized ADC fraction; divide such values by 2.5 for this
+        scale. Required when enabled; no default so
         a missing fit fails loudly.
     gain_source : str
         Provenance stamped into the product attrs.
@@ -46,9 +46,13 @@ class ChiParams:
     phi_max : float
         Noise fraction above which a window is flagged noise-dominated.
     kmin, kmax_cap : float
-        cpm, integration band limits.
+        cpm. A window sums the wavenumber bins strictly inside
+        `(kmin, min(kmax_cap, fmax_cap / spd))`. The recorded `kmax` is
+        the upper edge of the summed band (last bin plus half a bin
+        width), so it can exceed `kmax_cap` by up to half a bin.
     fmax_cap : float
-        Hz, frequency cap; kmax <= fmax_cap / spd.
+        Hz, frequency cap on the band. The cap in wavenumber is
+        `fmax_cap / spd`, cpm.
     min_spd : float
         m/s, windows below return NaN.
     window, step, nsec : float

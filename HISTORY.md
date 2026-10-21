@@ -70,8 +70,7 @@
     named PSD factor (inverse preemphasis, SOM sinc^4 antialias, spectral
     derivative); no time-domain filtering, no first difference, no `c`/`p`
     constants. `gain` is S/m per volt of `c1`; the shipboard constant 22
-    is per ADC fraction, 8.8 on this scale. Design:
-    `plans/2026-09-04-chi-design.md`.
+    is per ADC fraction, 8.8 on this scale.
 -   `modfish.chi` subtracts a measured instrument noise spectrum inside
     the band integral in place of the scalar cut that used to truncate
     the band. The old cut, raw PSD below `snr * noise_floor` with
@@ -260,6 +259,26 @@
     MOTIVE cruises.
 
 ### Documentation
+-   Docstrings no longer point to design notes, notebooks or code that
+    users cannot reach (the local `plans/` directory, a private cruise
+    processing repository, rust reader source, Matlab line numbers). The
+    values and reasons those pointers stood for are stated in place.
+    `modraw_tag_format.md` reads correctly on GitHub and is linked from
+    `modfish.modraw`. It now describes the `VNAV` frame, the ZDA
+    sentences, and the header checksum as the XOR of the 29 bytes from `$`
+    through the hex length. Missing numpy sections are filled in for
+    `chi.response`, `chi.spectra.spectral_factor`, `chi.noise` and
+    `fctd.grid_casts`, `make_l1` and `process_deployment`.
+-   The chi group attr `noise_source` of the built-in floor reads "FCTD
+    2024 and 2025 MOTIVE cruises, lower envelope at q=0.05, cluster 1.5x"
+    (it named a private notebook).
+-   `chi.closure` Notes: the closure prefactor `(g alpha)^2 / n2` is in
+    W/kg. The printed (A2) of Alford and Pinkel (2000b),
+    `(g alpha / rho_0) (chi / N^2) (1 + 1/Rrho^2)`, is not, and equals it
+    only where `g alpha rho_0 = 1` (SI), alpha about 1e-4 per K. The old
+    text said 2 and 2e-4.
+-   README and package overview describe the modraw, fctd, chi and tc
+    processing chain, with an example from raw files to products.
 -   Documented the `modfish.modraw` subpackage in its module docstring
     (stream/group table, example, quality-tally semantics) and corrected
     `modraw_tag_format.md` against byte-level findings from MOTIVE 2024/2025
@@ -269,9 +288,8 @@
     as a read boundary.
 -   Documented the `modfish.fctd` subpackage and `modfish.tc` module in
     their docstrings, including three parameter choices left open at the
-    time for the T-C correction analysis (FCTD reprocessing
-    sub-project 3): the
-    phase-matching low-pass cutoff `f0` (6 Hz in `gvpy`, 9 in the orphaned
+    time for the T-C correction analysis: the phase-matching low-pass
+    cutoff `f0` (6 Hz in `gvpy`, 9 in the orphaned
     `modfish.utils` copy), the thermal-mass `alpha`/`beta` pair, and
     whether `t`/`c` should be renamed. All three were settled while the
     T-C correction chain was built, and the docstrings now record the

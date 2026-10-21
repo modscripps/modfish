@@ -1,10 +1,9 @@
-"""Deployment driver: chains concat -> l1 -> grid and writes both products.
+"""Deployment driver: chains concat -> l1 -> chi (optional) -> grid and writes
+both products.
 
 The only stage in the pipeline that touches the filesystem for its outputs
 (`concat_l0` itself reads the per-file inputs); every other stage is a pure
-Dataset/DataTree transform. See
-`plans/2026-09-01-fctd-pipeline-design.md` for the stage order and
-rationale.
+Dataset/DataTree transform.
 """
 
 import logging
@@ -62,9 +61,11 @@ def process_deployment(
     Raises
     ------
     ValueError
-        Re-raised, with `name` added to the message, from any `ValueError`
-        raised by `make_l1`, `add_chi`, or `grid_casts` (e.g. zero casts
-        detected).
+        From `concat_l0`, unwrapped, if `files` is empty or no `ctd` group
+        survives concatenation. Re-raised, with `name` added to the
+        message, from any `ValueError` raised by `make_l1`, `add_chi`, or
+        `grid_casts` (e.g. zero casts detected, no usable GPS fix and no
+        `latitude_fallback`).
     """
     if config is None:
         config = FCTDConfig()

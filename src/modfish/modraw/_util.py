@@ -50,8 +50,8 @@ def ms_to_datetime(ms):
     """Milliseconds since 1970 to datetime64[ns], NaT where not representable.
 
     A corrupt but well-formed hex timestamp (one flipped high digit) can
-    exceed the datetime64[ns] range. Converting it through pandas raised
-    `OverflowError` and cost the whole file.
+    exceed the datetime64[ns] range. Such values become NaT instead of
+    raising, so one bad record does not cost the whole file.
 
     Parameters
     ----------

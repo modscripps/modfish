@@ -5,15 +5,15 @@ Consumes the deployment-level DataTree `modfish.fctd.concat.concat_l0`
 produces and builds the L1 product: the `ctd` group gains position, depth,
 `dPdt`, per-sample cast labels, T-C-corrected `t`/`c` (alongside the raw
 values), and TEOS-10 derived variables. `efe`/`ecop` are carried through
-cast-tagged; `gps`/`alti` are carried through unchanged. See
-`plans/2026-09-01-fctd-pipeline-design.md` for the stage order and
-rationale.
+cast-tagged; `gps`/`alti` are carried through unchanged. Corrections run
+after positions and `dPdt` are in place, and the TEOS-10 variables are
+derived per sample from the corrected `t`/`c`, before gridding.
 
-`t`/`c` keep their names. The T-C correction analysis settled that question
-(FCTD reprocessing sub-project 3, design decision 9). The fitted correction
-parameters live in the cruise config (`fctd.params.tc` in motive-cruise-proc
-`config.yml`) and the analysis is written up in that repo's
-`book/data/fctd_tc_correction.md`.
+Corrected values keep the names `t`/`c` so downstream consumers get
+corrected data by default. The uncorrected physical values are kept as
+`t_raw`/`c_raw`, and each of `t`/`c` has a `processing` attr naming the
+correction steps applied to it. Correction parameters come from
+`FCTDConfig.tc`. The defaults apply no correction.
 """
 
 import dataclasses
@@ -299,11 +299,25 @@ def make_l1(tree: xr.DataTree, config: FCTDConfig | None = None) -> xr.DataTree:
         `depth`, `lon`, `lat`, `dPdt`, `SP`, `SA`, `CT`, `sgth0`, coord
         `cast`) and `casts` (per-cast table), plus `efe`, `ecop`, `gps`,
         `alti` carried through when present in `tree` (`efe`/`ecop`
-        cast-tagged, `gps`/`alti` unchanged). Root attrs and `ctd` attrs
-        carry the input tree's concat provenance (`files`, `n_files`), and
-        `ctd` attrs the running modfish (`modfish.utils.provenance`:
-        `modfish_version`, `modfish_commit` from a git checkout), which
-        `grid_casts` carries into the grid with the rest of the `ctd` attrs.
+        cast-tagged, `gps`/`alti` unchanged).
+
+        Root attrs: a copy of `tree.attrs` (from `concat_l0`: `files`,
+        `n_files`, `groups`).
+
+        `ctd` attrs: the input root attrs, overridden by the input `ctd`
+        attrs (calibration coefficients, `n_misstamped`, ...), plus
+
+        - `latitude_source`: "gps" or "fallback".
+        - `n_lon_masked` (GPS only): number of samples with `lon` masked
+          by `gps_max_gap`.
+        - `position_note` (GPS only, when `n_lon_masked` > 0).
+        - `latitude_source_note` (fallback only): why SA, CT and sgth0
+          are all-NaN.
+        - `corrections`: summary of the T-C correction chain, or "none".
+        - `modfish_version` and, from a git checkout, `modfish_commit`
+          (`modfish.utils.provenance`).
+
+        `grid_casts` copies the `ctd` attrs into the grid.
 
     Raises
     ------

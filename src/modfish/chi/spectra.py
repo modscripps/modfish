@@ -1,5 +1,5 @@
 """Per-window gradient spectra, corrections, the noise-floor subtraction
-and the band integral (spec "Estimator per window")."""
+and the band integral."""
 
 import gsw
 import numpy as np
@@ -121,6 +121,23 @@ def spectral_factor(f, fs, spd, params: ChiParams):
     `spd gain^2 (2 pi k)^2 / (|H_pre|^2 A(f))` with `k = f / spd`. It is a
     property of the acquisition chain, so the noise floor is pushed through
     the same factor as the signal.
+
+    Parameters
+    ----------
+    f : array_like
+        Frequency, Hz.
+    fs : float
+        Sampling rate, Hz.
+    spd : float
+        Fall rate, m/s.
+    params : ChiParams
+        Chi parameters (gain and the preemphasis/antialias constants).
+
+    Returns
+    -------
+    numpy.ndarray
+        Factor on `f` taking a raw PSD in V^2/Hz to a conductivity-gradient
+        spectrum in (S/m)^2 m^-2 per cpm.
     """
     f = np.asarray(f, dtype=float)
     k = f / spd
@@ -183,9 +200,10 @@ def integrate(k, Pk, Nk, kmin, kmax, dtdc_val, D):
     k : array_like
         Wavenumber, cpm, uniformly spaced.
     Pk : array_like
-        Corrected gradient spectrum.
+        Corrected conductivity-gradient spectrum, (S/m)^2 m^-2 per cpm.
     Nk : array_like or None
-        The noise floor on the same axis. `None` disables subtraction.
+        Noise floor on the same axis and in the same units as `Pk`.
+        `None` disables subtraction.
     kmin, kmax : float
         Band limits, cpm.
     dtdc_val, D : float

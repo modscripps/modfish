@@ -11,20 +11,22 @@ def decode_efe4(packets, meta):
 
     EFE4 record layout: 8-byte little-endian u64 millisecond timestamp +
     3-byte big-endian ADC counts per channel, `meta["recs_per_block"]`
-    records per block (80 on MOTIVE FCTD files).
+    records per block (80 on MOTIVE FCTD files). A valid payload is therefore
+    `recs_per_block * (8 + 3 * n_channels)` bytes long, 2320 bytes for 80
+    records of 7 channels.
 
     Voltage conversion:
+
     - Unipolar: volts = full_range * counts / 2**24
     - Bipolar: volts = full_range * (counts / 2**23 - 1)
 
     Parameters
     ----------
-    packets : list[Packet]
-        List of Packet objects with tag="EFE4". Each Packet has
-        attributes: tag, timestamp_ms, laptop_ts_cs, payload, length_field.
+    packets : list of Packet
+        `$EFE4` packets as returned by `modfish.modraw.framer.frame`.
     meta : dict
-        Metadata dict from parse_som3 with keys: n_channels, channels,
-        adc_conf, full_range, recs_per_block.
+        Channel setup from `parse_som3`, with keys `n_channels`,
+        `channels`, `adc_conf`, `full_range` and `recs_per_block`.
 
     Returns
     -------
@@ -34,14 +36,15 @@ def decode_efe4(packets, meta):
         `meta["channels"]`, units "V". Attrs count what was dropped:
         `n_bad_checksum` packets whose trailing checksum failed (binary
         counts give no other sign of corruption), `n_bad_length` packets
-        with the wrong payload length, and `n_bad_time` records whose
-        timestamp lies outside the datetime64[ns] range.
+        whose payload length differs from the one above, and `n_bad_time`
+        records whose timestamp lies outside the datetime64[ns] range.
 
     Raises
     ------
     ValueError
-        If no EFE4 packets have a valid payload length, or if timestamps
-        appear to be power-on-relative (not yet supported).
+        If no packet has both a valid checksum and a valid payload length,
+        or if the median timestamp is below 1e9 ms, which marks
+        power-on-relative time (not yet supported).
     """
     n_ch = meta["n_channels"]
     rec = np.dtype([("ts", "<u8"), ("adc", "u1", (n_ch, 3))])

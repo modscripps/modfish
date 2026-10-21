@@ -190,7 +190,7 @@ def parse_som3(payload):
             conf = "unipolar"
         elif config_0 == 0x09E0:
             conf = "bipolar"
-        else:  # fall back by channel name, epsiSetup_fill_meta_data.m:112-118
+        else:  # fall back by channel name, as Matlab's epsiSetup_fill_meta_data.m does
             conf = "bipolar" if name.startswith("s") else "unipolar"
         channels.append(name)
         adc_conf.append(conf)

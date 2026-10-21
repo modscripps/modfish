@@ -24,16 +24,10 @@ def synthetic_body():
     - one valid `$ECOP` record, so `read()` always has a group to return
       and never raises "no decodable data streams" for these tests;
     - one `$SB49` frame whose 16-hex header timestamp is `f`*16
-      (0xFFFFFFFFFFFFFFFF ms), which cannot fit in an int64 regardless of
-      the datetime unit pandas picks, so it reliably raises
-      `OutOfBoundsDatetime` without the `errors="coerce"` fix. This is a
-      larger value than the review's "~9.2e15 ms" example: under the
-      installed pandas (3.0), `pd.to_datetime(unit="ms")` now auto-selects
-      a coarser resolution for values like 9.2e15 or `0x1` + 15 zero
-      hex-chars, so those no longer overflow and would not reproduce the
-      bug here; the full-`f` value overflows unconditionally. Since the
-      header carries no calibration coefficients and no `$DCAL` block is
-      present, this frame also exercises the "SB49 without cal" path;
+      (0xFFFFFFFFFFFFFFFF ms), which does not fit in an int64 and lies far
+      outside the datetime64[ns] range. Since the header carries no
+      calibration coefficients and no `$DCAL` block is present, this frame
+      also exercises the "SB49 without cal" path;
     - one `$EFE4` frame with an arbitrary payload (never decoded, since
       this file has no `$SOM3` block), exercising the "EFE4 without SOM3"
       path.
@@ -54,11 +48,10 @@ def test_read_returns_datatree_with_expected_groups(tree):
 
 
 def test_read_root_attrs_carry_quality_tallies(tree):
-    # n_resync counts failed frame attempts. On a healthy full-file scan
-    # that includes every interleaved NMEA sentence (not SOM-framed, so the
-    # scanner correctly rejects them: 147 here) plus 5 header text lines.
-    # Corruption is signaled by the checksum/length tallies, which the spec
-    # requires to be zero on clean files.
+    # n_resync counts `$` anchors that did not start a frame: on this
+    # fixture the 147 interleaved NMEA sentences plus 5 header lines.
+    # Corruption shows in the checksum and length tallies, zero on a clean
+    # file.
     assert tree.attrs["n_resync"] == 152
     assert tree.attrs["n_bad_checksum"] == 0
     assert tree.attrs["n_blocks_SB49"] == 238
@@ -66,13 +59,9 @@ def test_read_root_attrs_carry_quality_tallies(tree):
 
 
 def test_read_ctd_group_carries_serialnum(tree):
-    # header_setup fields (survey, experiment, cruise, vehicle, fishflag,
-    # serialnum, gm_time) were stamped only onto the DataTree root's attrs,
-    # not onto the ctd group's own attrs (which got only the SBE49
-    # calibration coefficients); a consumer opening the ctd group alone,
-    # as the L0 pipeline does, never saw serialnum (notebook 04, real 2025
-    # data). header_setup itself parses the field correctly; this pins the
-    # ctd group carrying it too.
+    # header_setup fields (survey, ..., serialnum, gm_time) must be on the
+    # ctd group's own attrs as well as the root's, since the L0 pipeline
+    # opens the ctd group alone.
     assert tree["ctd"].attrs["serialnum"] == "0537"
 
 
@@ -147,7 +136,7 @@ def _ctd_body(sb49_packets=None, header_text=b""):
 
 def test_read_overflowing_record_timestamp_drops_only_that_record(tmp_path):
     """One flipped high hex digit in a record timestamp is valid hex but far
-    past datetime64[ns]. It used to raise OverflowError, losing the file."""
+    past datetime64[ns]. Only that record is dropped, not the file."""
     from modraw_frames import fixture_packets
 
     pk = fixture_packets()
@@ -165,8 +154,8 @@ def test_read_overflowing_record_timestamp_drops_only_that_record(tmp_path):
 
 
 def test_read_decoder_failure_omits_only_that_group(tmp_path, caplog):
-    """GGA sentences without a ZDA to date them used to raise and lose the
-    CTD too. The gps group is now omitted with a warning."""
+    """GGA sentences without a ZDA to date them make decode_gga raise.
+    Only the gps group is omitted, with a warning, and the CTD survives."""
     body = _ctd_body() + b"T0000000001$GPGGA,120000.00,0100.0000,N,13930.0000,W,1,08\r\n"
     with caplog.at_level(logging.WARNING):
         tree = modfish.modraw.read(_write(tmp_path, "gga.modraw", body))
@@ -193,8 +182,8 @@ def test_read_drops_bad_checksum_packets(tmp_path):
 
 
 def test_read_partial_header_cal_falls_back_to_dcal(tmp_path):
-    """A header carrying only some coefficients (no CG/CH/CI/CJ) used to
-    skip the $DCAL fallback and fail with KeyError: 'cg'."""
+    """A header carrying only some coefficients (no CG/CH/CI/CJ) falls back
+    to the $DCAL block for the full set."""
     text = b"TA0= 7.906934e-04\nTA1= 2.938320e-04\nPA0= -5.312621e-02\n"
     tree = modfish.modraw.read(_write(tmp_path, "partial.modraw", _ctd_body(header_text=text)))
     assert "ctd" in tree.children
