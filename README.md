@@ -22,9 +22,10 @@ l1_path, grid_path = modfish.fctd.process_deployment(l0, "proc", "d07", config=c
 ```
 
 The `examples/` folder holds three files.
-`fctd_processing.ipynb` is an executed notebook that processes one deployment end to end and fits the T-C and chi gain values on its own data. Its header lists the uv and kernel setup steps.
-`fctd_example.yml` is a template configuration with every key at its default, except the recommended chi `rail_lo`, `rail_hi` and `min_bins`, and with commented reference values.
-`fctd_modfish_notes.md` compares modfish with the Matlab FCTD routines for users who port changes into Matlab.
+
+- `fctd_processing.ipynb` is an executed notebook that processes one deployment end to end and fits the T-C and chi gain values on its own data. Its header lists the uv and kernel setup steps.
+- `fctd_example.yml` is a template configuration with every key at its default, except the recommended chi `rail_lo`, `rail_hi` and `min_bins`, and with commented reference values.
+- `fctd_modfish_notes.md` compares modfish with the Matlab FCTD routines for users who port changes into Matlab.
 
 ## How to Install
 Clone or download the repository and install via `pip install <path-to-modfish>` or, to be able to make changes to the code on the fly, as editable package via `pip install -e <path-to-modfish>`.
