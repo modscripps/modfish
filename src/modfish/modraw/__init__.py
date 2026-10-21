@@ -12,9 +12,9 @@ T<host ticks>$<TAG><16 hex timestamp><8 hex length>*<chk><data>*<chk>\\r\\n
 ```
 
 GPS sentences (`$GPGGA`/`$INGGA`, `$GPZDA`/`$INZDA`) are plain NMEA text
-interleaved in the same stream, not SOM frames. Full byte-level layout for
-every tag, including the corrections logged below, lives in
-`modraw_tag_format.md` at the repo root.
+interleaved in the same stream, outside any SOM frame. The byte-level
+layout of every tag is in the
+[`.modraw` tag reference](https://github.com/modscripps/modfish/blob/main/modraw_tag_format.md).
 
 The header's declared length is not a safe boundary to skip to: on a MOTIVE
 2025 fixture its declared size (7069 bytes) falls inside the block stream,
@@ -50,20 +50,18 @@ tree["ctd"].ds.p.plot()
 
 `read()` stamps scan-level counters onto `tree.attrs`: `n_frames`,
 `n_resync`, `n_bad_checksum`, and one `n_blocks_<TAG>` per tag found.
-`n_resync` counts `$` anchors that did not start a valid frame, not
-corruption: a whole-file scan runs into every interleaved NMEA sentence and
-header text line, none of which are SOM frames. Judge file health from
-`n_bad_checksum` and each group's own drop counts (`n_bad_checksum`,
-`n_bad_length`, `n_bad_time` in the group's `attrs`), not from `n_resync`.
+`n_resync` counts `$` anchors that did not start a valid frame. A
+whole-file scan rejects every interleaved NMEA sentence and every header
+line holding a `$` this way, so `n_resync` is large on healthy files. Judge
+file health from `n_bad_checksum` and each group's own drop counts
+(`n_bad_checksum`, `n_bad_length`, `n_bad_time` in the group's `attrs`).
 Packets with a bad checksum are dropped by the decoders. A decoder that
 fails on its stream leaves its group out with a warning; the rest of the
 file is still read.
 
-This module follows
-`MOD_fish_lib/EPSILOMETER/epsilib/mod_som_read_epsi_files_v4.m`, including
-its SBE49 calibration polynomials, and adds a per-block checksum check the
-Matlab reader does not do. The full tag reference this implementation is
-built from is `modraw_tag_format.md` in the repository root.
+This module follows the Matlab reader `mod_som_read_epsi_files_v4.m`
+(MOD_fish_lib), including its SBE49 calibration polynomials, and adds a
+per-block checksum check the Matlab reader does not do.
 """
 
 from .header import read_header, header_setup, sbe49_cal

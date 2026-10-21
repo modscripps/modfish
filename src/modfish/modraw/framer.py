@@ -2,29 +2,27 @@
 # coding: utf-8
 """Binary frame scanner for `.modraw` block streams.
 
-A single-pass scanner over the "SOM tag frame" family described in
-`modraw_tag_format.md`:
+A single-pass scanner over the SOM tag frame family described in the
+[`.modraw` tag reference](https://github.com/modscripps/modfish/blob/main/modraw_tag_format.md):
 
 ```
 $<TAG><16 hex timestamp><8 hex length>*<hh><payload>*<hh>\\r\\n
 ```
 
 optionally preceded by a `T<10 ASCII digits>` laptop-clock prefix
-(`SYSTEM_TIME` in centiseconds). Replaces the old per-tag regex counting in
-favor of one scanner that decodes every field once: tag, timestamp, payload,
-and the trailing XOR checksum, while tallying resyncs and bad checksums
-instead of silently dropping them.
+(`SYSTEM_TIME` in centiseconds). The scanner decodes tag, timestamp,
+payload and trailing checksum of every frame once. The trailing checksum is
+the XOR of the payload bytes and is verified. The header checksum `*<hh>`
+after the length field is checked for hex digits only. Resyncs and bad
+checksums are tallied in `FrameStats`.
 
-`ALTI` is a documented exception (see `modraw_tag_format.md`, "Per-tag DATA
-payload"): the 8-char field that is normally a hex byte-length instead holds
-the distance reading as ASCII decimal text, the payload is empty, and the
-frame ends with a single `*hh\\r\\n` directly after that field (matching
-Matlab's non-greedy regex, which stops at the first `*XX\\r\\n` it finds).
-
-This layout comes from the Matlab reader and is unverified against real
-bytes: no `$ALTI` frame turned up in about 700 `.modraw` files from two
-MOTIVE cruises. ALTI is documented as "on demand, 1 value/block", so it may
-simply be absent from the deployments searched so far.
+`ALTI` is an exception: the 8-char field that is normally a hex byte length
+holds the distance reading as ASCII decimal text, the payload is empty, and
+the frame ends with a single `*hh\\r\\n` directly after that field. This
+matches the Matlab reader's non-greedy regex, which stops at the first
+`*XX\\r\\n` it finds. The layout comes from the Matlab reader and is
+unverified against real bytes, since no sampled MOTIVE `.modraw` file has
+an `$ALTI` frame.
 
 Pass the whole file to `frame`. A file's declared header length can fall
 inside the block stream, so the bytes past it can miss leading `$SOM3`,
@@ -80,9 +78,11 @@ class FrameStats:
     n_frames : int
         Frames decoded.
     n_resync : int
-        Failed frame attempts: `$` anchors that did not start a valid
-        frame. Interleaved NMEA sentences and header text count here, so
-        this is not a corruption measure.
+        `$` anchors that did not start a valid frame. Interleaved NMEA
+        sentences and header lines holding a `$` count here as well as
+        frames with damaged framing, so a healthy file has many. `$`
+        bytes inside the payload of a decoded frame are skipped and not
+        counted.
     n_bad_checksum : int
         Frames whose trailing XOR checksum did not match.
     tag_counts : dict of str to int
@@ -202,13 +202,14 @@ def _try_frame_at(body, dollar, pos):
 
 
 def frame(body):
-    """Scan a `.modraw` block stream and decode every SOM frame in it.
+    """Scan bytes for SOM frames and decode every one found.
 
     Parameters
     ----------
     body : bytes
-        The whole file's bytes (see the module docstring for why not only
-        the part past the declared header).
+        Bytes to scan, normally the whole file including its ASCII header.
+        The declared header length can fall inside the block stream, so
+        scanning only the bytes past it can miss frames.
 
     Returns
     -------
@@ -216,9 +217,8 @@ def frame(body):
         Every frame decoded, in stream order. Frames with a bad trailing
         checksum are included with `chk_ok` False; the decoders drop them.
     stats : FrameStats
-        Counters describing the scan: frames found, failed frame attempts
-        (rejected `$` anchors, `n_resync`), bad checksums, and a per-tag
-        count.
+        Counters describing the scan: frames found, rejected `$` anchors
+        (`n_resync`), bad trailing checksums, and a per-tag count.
     """
     packets = []
     stats = FrameStats()

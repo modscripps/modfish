@@ -383,7 +383,7 @@ def downup_separation(
     starts = np.concatenate([[0], edges])
     stops = np.concatenate([edges, [cast_id.size]])
     runs: dict[int, list[tuple[int, int]]] = {}
-    for a, b in zip(starts, stops):
+    for a, b in zip(starts, stops, strict=True):
         runs.setdefault(int(cast_id[a]), []).append((int(a), int(b)))
 
     def cast_index(cid):

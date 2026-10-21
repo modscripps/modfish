@@ -237,7 +237,9 @@ def concat_l0(files: list, keep_counts: bool = False, groups=None) -> xr.DataTre
     keep_counts : bool, optional
         Keep the raw-counts variables (`t_raw`, `c_raw`, `p_raw`, `pt_raw`,
         `bb_raw`, `chla_raw`, `fdom_raw`) in the `ctd` and `ecop` groups.
-        Default False (drop them).
+        Default False (drop them). For inspection only: `make_l1` refuses
+        a tree whose `ctd` group has `t_raw`/`c_raw`, since it uses those
+        names for the uncorrected physical values.
     groups : iterable of str or None, optional
         L0 group names to load and concatenate, e.g. ``("ctd", "gps")``.
         None (default) loads every group present. `ctd` must be among the

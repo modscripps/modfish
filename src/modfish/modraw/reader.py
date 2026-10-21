@@ -62,9 +62,8 @@ def read(file):
           (`decode_efe4`), present only when both `$EFE4` and `$SOM3`
           blocks were found (the channel setup comes from `$SOM3`).
         - `ecop` : ECOP Tridente fluorometer time series (`decode_ecop`).
-          Its time axis is not sorted or deduplicated here; the fixture's
-          ~32 blocks/s stream carries duplicate timestamps, and decoders
-          own their own axes.
+          Its time axis is not sorted or deduplicated. MOTIVE 2025 ECOP
+          streams run at ~32 blocks/s and repeat timestamps.
         - `gps` : `$GPGGA`/`$INGGA` position fixes dated from
           `$GPZDA`/`$INZDA` (`decode_gga`), present only when the file has
           at least one GGA sentence.
@@ -96,12 +95,11 @@ def read(file):
 
         - `file` : the input file's name.
         - `n_frames`, `n_resync`, `n_bad_checksum` : from `FrameStats`.
-          `n_resync` counts failed frame attempts, not corruption: a
-          whole-file scan legitimately includes every interleaved NMEA
-          sentence and header text line, none of which are SOM frames, so
-          the scanner correctly rejects and skips past them. File health is
-          judged from `n_bad_checksum` and the decoders' own
-          `n_bad_length` tallies, not from `n_resync`.
+          `n_resync` counts `$` anchors that did not start a valid frame.
+          A whole-file scan rejects every interleaved NMEA sentence and
+          every header line holding a `$` this way, so `n_resync` is large
+          on healthy files. Judge file health from `n_bad_checksum` and the
+          decoders' own drop counts.
         - `n_blocks_<TAG>` : per-tag frame counts, flattened from
           `FrameStats.tag_counts`.
         - header setup fields from `header_setup` (survey, experiment,

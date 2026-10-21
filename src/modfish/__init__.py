@@ -1,14 +1,15 @@
 """
 # Overview
 
-Python package to work with data from FastCTD and Epsifish instruments devloped by the
+Python package to work with data from FastCTD and Epsifish instruments developed by the
 [Multiscale Ocean Dynamics](https://mod.ucsd.edu) group at the [Scripps Institution of Oceanography](https://scripps.ucsd.edu).
 
-Beyond reading legacy Matlab-gridded output, the package covers the raw-data side: `modraw`
-decodes FCTD `.modraw` files into per-stream NetCDF (L0), and `fctd` chains L0
+`modraw` decodes FCTD `.modraw` files into per-stream NetCDF (L0). `fctd` chains L0
 concatenation, cast detection, sensor corrections, and depth gridding into L1 and gridded
 products (`fctd.process_deployment`). `chi` computes microconductivity chi from the L0
-`efe/c1` stream and adds it to the L1 and gridded products.
+`efe/c1` stream and adds it to the L1 and gridded products. `tc` holds the T-C sensor
+corrections `fctd` applies and the tools that estimate their parameters. `io` reads
+legacy Matlab-gridded FCTD and Epsifish output.
 
 
 # Installation
@@ -21,7 +22,19 @@ Note: The package has **not** been published to pip so you need to install from 
 
 # Examples
 
-Read a gridded FastCTD dataset into an `xarray.Dataset` structure:
+Process one deployment from raw `.modraw` files to L1 and gridded products:
+```python
+from pathlib import Path
+import modfish
+
+raw = sorted(Path("raw").glob("*.modraw"))
+modfish.modraw.convert(raw, "l0")
+l0 = sorted(Path("l0").glob("*.nc"))
+config = modfish.fctd.FCTDConfig.from_yaml("fctd.yml")
+l1_path, grid_path = modfish.fctd.process_deployment(l0, "proc", "d07", config=config)
+```
+
+Read a legacy gridded FastCTD dataset into an `xarray.Dataset` structure:
 ```python
 import modfish
 ds = modfish.io.load_fctd_grid("FCTDgrid.mat")

@@ -1,5 +1,5 @@
 """Alford and Pinkel (2000b) closure, appendix (A2) to (A6), with the
-resolved fraction from the Batchelor band fraction (spec "Closure")."""
+resolved fraction `r` from `modfish.chi.batchelor.BandResponse`."""
 
 import gsw
 import numpy as np
@@ -211,16 +211,21 @@ def closure(chi, spd, fs, strat: xr.Dataset, params: ChiParams,
         `(1 + 1/Rrho^2)` factor (Rrho = 0 or the factor above
         `rrho_factor_max`); a NaN `Rrho` instead propagates as NaN
         `chi_pe`, `eps_chi` and `chi_tot` with no flag bit set here
-        (missing environment is Task 7's `FLAG_NOENV`).
+        (`chi_dataset` sets `FLAG_NOENV` for missing environment).
 
     Notes
     -----
     The prefactor `(g alpha)^2 / n2` follows from the paper's own (A4)
     `J_b = Gamma eps`, (A5) `J_b = chi_pe / 2` and the Osborn-Cox balance
     `K_T = K_rho = chi / (2 Tz^2)` at `N^2 = g alpha Tz`, and carries
-    units of W/kg. The printed (A2) has `g alpha / rho_0`, which equals
-    this form only where `g alpha rho_0` = 2, i.e. at alpha = 2e-4
-    [TK: confirm against the A&P 2000b appendix text].
+    units of W/kg. The printed (A2),
+    `chi_pe = (g alpha / rho_0) (chi / N^2) (1 + 1/Rrho^2)`, is not in
+    W/kg. It equals the form used here only where `g alpha rho_0 = 1`
+    in SI units, i.e. at alpha of about 1e-4 per K. The paper states
+    that its (A7) reduces to the Osborn-Cox result (A5) for a perfect
+    probe, which the form used here does. The paper uses a constant
+    `Rrho = -1`. This implementation uses the in situ `Rrho` from
+    `stratification`, capped through `rrho_factor_max`.
     """
     chi = np.asarray(chi, dtype=float)
     n2 = strat["n2"].values

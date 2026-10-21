@@ -8,14 +8,13 @@ version = "2025.10.0"
 authors = [
     {name = "Gunnar Voet", email = 'gvoet@ucsd.edu'},
     ]
-description = "Python package for reading data from FastCTD and Epsifish developed by the Multiscale Ocean Dynamics group."
+description = "Processing of FastCTD and Epsifish data from the Multiscale Ocean Dynamics group: raw decoding, L1 and gridded products, T-C corrections, microconductivity chi."
 readme = "README.md"
 license = {file = "LICENSE"}
 keywords = ["physical oceanography"]
 classifiers = [
     "Development Status :: 3 - Alpha",
-"License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
-
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
     "Natural Language :: English",
     "Programming Language :: Python :: 3",
     "Intended Audience :: Science/Research",
@@ -38,7 +37,7 @@ dependencies = [
 plot = ["matplotlib>=3.1"]
 
 [project.urls]
-# Homepage = "https://example.com"
+Homepage = "https://github.com/modscripps/modfish"
 Documentation = "https://modscripps.github.io/modfish"
 Repository = "https://github.com/modscripps/modfish.git"
 Issues = "https://github.com/modscripps/modfish/issues"

@@ -76,8 +76,10 @@ def convert(files, outdir, overwrite=False, parallel=False):
         If False, skip files whose outputs already exist.
     parallel : bool, optional
         If True, convert files in a `ProcessPoolExecutor` with its default
-        number of workers (the CPU count). Default: False. Errors in
-        worker setup are not caught and fail the whole batch.
+        number of workers: `os.process_cpu_count()` on Python 3.13 and
+        later, `os.cpu_count()` before, capped at 61 on Windows. Default:
+        False. Errors in worker setup are not caught and fail the whole
+        batch.
 
     Returns
     -------

@@ -1,12 +1,17 @@
 # FCTD pipeline validation against the Matlab grids
 
 Evidence behind `tests/test_fctd_crossval.py`. Every number here comes from runs on
-samoan on 2026-09-01 with the mod server mounted. Design decisions referenced below
-live in `plans/2026-09-01-fctd-pipeline-design.md`.
+samoan on 2026-09-01 with the mod server mounted.
 
-Two deployments, one per cruise, as the design doc's "Testing and validation" section
-asks for. They are not equivalent baselines, and the difference decides how the numbers
-should be read.
+Historical configuration. These runs predate the current `TCParams`. The `phase_match`
+switch, the `tcfit` pressure range and the fitted `tau1`/`L1` below belong to a
+phase-matching T-C correction that has since been removed from `FCTDConfig` (`lag`,
+`tau_t` and `lowpass` replace it). `phase_match=False` corresponds to the current default
+`TCParams()`, which applies no correction. A config that still sets `phase_match` or
+`tcfit` is rejected by `FCTDConfig.from_dict`.
+
+Two deployments, one per cruise. They are not equivalent baselines, and the difference
+decides how the numbers should be read.
 
 | | 2024 `24_1120_d11_fctd_to_mooringA` | 2025 `25_1205_d07_FCTD1_FrontStation` |
 |---|---|---|
@@ -99,21 +104,19 @@ the same water at different depths.
 `FastCTD_GridData.m:286` at `0d0d5e4` sets `myFCTD.depth = sw_dpth(myFCTD.pressure,20)`.
 The deployment is at 0.73 degN. `sw_dpth` depends on latitude through the gravity term, and
 20 degN against 0.73 degN shifts the depth assigned to a given pressure by 0.65 m at
-1046 m. Our `_add_depth` uses `gsw.z_from_p` with per-sample latitude (design doc, "Stage:
-L1", step 1). At the true latitude the two formulas agree to 3e-4 m at 1000 dbar, so the
+1046 m. Our `_add_depth` uses `gsw.z_from_p` with per-sample latitude. At the true latitude the two formulas agree to 3e-4 m at 1000 dbar, so the
 formula choice contributes nothing and the hardcoded 20 accounts for the whole offset.
 
 Undoing it collapses the pressure difference from 0.308 to 0.0416 dbar and the temperature
 difference from 0.00214 to 0.00056 K. `test_crossval_d11_depth_coordinate_convention`
 asserts both.
 
-The `LAT = 30` fallback in `make_FCTDall_L0.m:87` that the design doc calls out is a
-separate site and is not on the code path that produced this baseline.
+The `LAT = 30` fallback in `make_FCTDall_L0.m:87` is a separate site and is not on the code path that produced this baseline.
 
 ## 2024 d11 response matching in the Matlab gridder
 
-The design doc records that the cruise-era L1 ships with `apply_response_matching_code = 0`
-and concludes that no T-C correction reached any MOTIVE product. That flag lives in
+The cruise-era L1 ships with `apply_response_matching_code = 0`, which alone would suggest
+that no T-C correction reached any MOTIVE product. That flag lives in
 `make_FCTDall_L1.m:14`, a file that did not yet exist at `0d0d5e4`, so this baseline never
 went through it. `FastCTD_GridData` carries its own correction and applies it to every
 profile before binning:
@@ -150,8 +153,7 @@ unchanged at 3.21e-4 S/m. Our phase matching does not smooth temperature (0.5 m 
 
 Consequence for the comparison contract. `phase_match=False` matches the Matlab L1 stage
 and does not match the gridded baseline. The residuals in the table above are dominated by
-that, so they are an upper bound on the disagreement between the two chains. Sub-project 3,
-which chooses correction parameters, is where this gets settled.
+that, so they are an upper bound on the disagreement between the two chains.
 
 ## 2025 d07 deployment and baseline
 
@@ -255,8 +257,8 @@ whole 0.0016 is the temperature scale and nothing else.
 
 ## Salinity and density formulation
 
-Two differences the design doc anticipated turn out to be numerically irrelevant here, and
-one real one shows up in density. Numbers in this section are from the 2024 product.
+Two expected differences turn out to be numerically irrelevant here, and one real one
+shows up in density. Numbers in this section are from the 2024 product.
 
 - **PSS-78 is PSS-78.** `gsw.SP_from_C(c*10, t, p)` and `sw_salt(c*10/sw_c3515, t, p)`
   agree on the 2024 product's own binned values to a maximum of 1.4e-14 over 350,116
@@ -266,9 +268,8 @@ one real one shows up in density. Numbers in this section are from the 2024 prod
   conversion puts the Matlab salinity 0.0016 high.
 - **Per-sample against binned salinity is 1e-6.** Within our own product, `SP` computed per
   sample and then bin-averaged differs from `SP` recomputed from the binned c/t/p by 3.3e-9
-  (median) and 2.8e-6 (p99). The design doc's preference for computing before binning
-  ("Stage: L1", step 5) is correct in principle and worth about 1e-6 in practice on this
-  deployment.
+  (median) and 2.8e-6 (p99). Computing before binning is correct in principle and worth
+  about 1e-6 in practice on this deployment.
 - **Potential density does differ.** The Matlab `density` field is `sw_pden(S,T,P,0)`
   (`FastCTD_GridData.m:579`). Against gsw `sigma0` on identical binned inputs it sits
   0.00514 kg/m^3 low (median), 0.00767 at p99, 0.00802 at most. That is larger than the
@@ -278,30 +279,29 @@ one real one shows up in density. Numbers in this section are from the 2024 prod
 
 ## Intentional differences
 
-Complete list, each with the design decision it comes from
-(`plans/2026-09-01-fctd-pipeline-design.md`).
+Complete list, each with the reason for it.
 
 | difference | ours | Matlab | why |
 |---|---|---|---|
-| depth from pressure | `gsw.z_from_p`, per-sample latitude | `sw_dpth`, at 20 degN in 2024 and at the deployment mean latitude in 2025 | "Stage: L1" step 1: depth via `gsw.z_from_p` with per-sample latitude |
-| missing position | `latitude_fallback` with a warning, `lon` left NaN | silent `LAT = 30` | "Stage: L1" step 1: replaces Matlab's silent fallback |
-| salinity and density | per sample from c/t/p before binning | from binned C/T/P after gridding | "Stage: L1" step 5, and bug list item "salinity/density derived after binning" |
-| equation of state | TEOS-10 (`SA`, `CT`, `sigma0`) | EOS-80 `sw_pden` for density. Practical salinity is PSS-78 on both sides | "Stage: L1" step 5: SP, SA, CT, sigma-0 via gsw |
-| depth-smoothed salinity | absent, smoothing is analysis-side | Chebyshev-smoothed `salinity`, absent in the 2024 baseline and present in 2025 | "Stage: grid": dropped, gridded products carry unsmoothed binned values |
-| empty bins | NaN, guaranteed | NaN in both products checked, no exact zeros in either `temperature` field | "Stage: grid": empty bins are NaN, never zero (bug B4) |
-| out-of-range samples | dropped by the histogram | clamped into the first and last bin by `bindata.m` | "Stage: grid": rejected, never clamped (bug B3) |
-| skipped casts | absent from the product | zero columns | "Stage: grid": skipped casts are absent, never zero columns |
-| cast bookkeeping | one detector, chronological integer ids, `cast` coordinate on both the time series and the grid | detection run three times, no key linking grid columns to the time series | "Stage: cast detection": one implementation, run once, consumed by both L1 and grid |
-| down and up | one grid with a `direction` coordinate | `FCTDgrid` / `FCTDdown` / `FCTDup`, no direction flag in `FCTDgrid` | "Decisions": one grid with a `direction` coordinate replaces the triple |
+| depth from pressure | `gsw.z_from_p`, per-sample latitude | `sw_dpth`, at 20 degN in 2024 and at the deployment mean latitude in 2025 | depth at each sample's own latitude, TEOS-10 like the rest of L1 |
+| missing position | `latitude_fallback` with a warning, `lon` left NaN | silent `LAT = 30` | a missing position stays visible (warning, `latitude_source` attr) |
+| salinity and density | per sample from c/t/p before binning | from binned C/T/P after gridding | the Matlab density mixed depth-smoothed S with unsmoothed T |
+| equation of state | TEOS-10 (`SA`, `CT`, `sigma0`) | EOS-80 `sw_pden` for density. Practical salinity is PSS-78 on both sides | SP, SA, CT and sigma-0 all come from gsw |
+| depth-smoothed salinity | absent, smoothing is analysis-side | Chebyshev-smoothed `salinity`, absent in the 2024 baseline and present in 2025 | gridded products carry unsmoothed binned values |
+| empty bins | NaN, guaranteed | NaN in both products checked, no exact zeros in either `temperature` field | a zero in an empty bin reads as data |
+| out-of-range samples | dropped by the histogram | clamped into the first and last bin by `bindata.m` | clamping piles out-of-range water into the edge bins |
+| skipped casts | absent from the product | zero columns | a zero column reads as data |
+| cast bookkeeping | one detector, chronological integer ids, `cast` coordinate on both the time series and the grid | detection run three times, no key linking grid columns to the time series | one detector, run once, consumed by both L1 and grid, so a grid column joins back to the time series by cast id |
+| down and up | one grid with a `direction` coordinate | `FCTDgrid` / `FCTDdown` / `FCTDup`, no direction flag in `FCTDgrid` | one grid with a `direction` coordinate replaces the three products |
 | minimum cast duration | 10 s in addition to the 10 dbar range | 10 dbar range only | `CastParams.min_duration`, new in this pipeline |
-| count variables | dropped at concat, available in the per-file L0 | carried | "Data model": concat drops count variables so `t_raw`/`c_raw` unambiguously mean uncorrected physical values |
-| time-gridded product | absent | `tGrid` | "Stage: grid": `tGrid` dropped, buggy and unused downstream |
-| T-C correction | explicit config, off for both comparisons | legacy gain/phase plus low pass in the 2024 gridder, off in the 2025 chain | "Stage: L1" step 4: every switch and parameter explicit config |
+| count variables | dropped at concat, available in the per-file L0 | carried | in L1, `t_raw`/`c_raw` then unambiguously mean uncorrected physical values |
+| time-gridded product | absent | `tGrid` | Matlab `tGrid` is buggy and unused downstream |
+| T-C correction | explicit config, off for both comparisons | legacy gain/phase plus low pass in the 2024 gridder, off in the 2025 chain | every switch and parameter is explicit config |
 
-The empty-bin row is a guarantee, not an observed difference. Neither Matlab `temperature`
+The empty-bin row is a guarantee. It is not an observed difference. Neither Matlab `temperature`
 field holds a single exact zero (0 of 350,116 finite points in 2024, 0 of 1,282,179 in
-2025), because `bindata.m` divides by a count it has already set to NaN. The zero fills the
-design doc catalogues do not appear in either product. The pipeline guarantees NaN anyway.
+2025), because `bindata.m` divides by a count it has already set to NaN. The Matlab zero
+fills do not appear in either product. The pipeline guarantees NaN anyway.
 Clamping was not tested, since neither deployment reaches the 2000 m grid edge.
 
 Defects found on the Matlab side are not in this table, because they are not choices. The
@@ -340,14 +340,11 @@ Peak resident memory during the d07 `concat_l0` was about 16 GB.
   conductivity ratio, so the error is positive at every ocean temperature. Anyone using
   `FCTDgrid.salinity` or `salinity_despike` from the 2025 cruise, or comparing 2024 against
   2025 salinities, needs to know. Worth reporting upstream.
-- Whether the 2024 gridder's legacy gain and phase correction is the right target for our
-  `phase_correct` parameters is sub-project 3.
-- Sub-project 3: `tcfit`'s pressure range is converted to a contiguous index span, not a
-  per-sample mask, so on a deployment record with multiple casts the fit effectively sees
-  the whole record, surface soaks included. Per-cast or masked-segment fitting is worth
-  evaluating. The resolved `tcfit` (the range actually used, not the unresolved `None` when
-  the default kicked in) is now stamped onto `ctd.attrs["tcfit"]` and into the
-  `corrections` string, so this is at least visible in the product.
-- Sub-project 5: `concat_l0` peak memory is about 16 GB, measured on the d07 fixture (see
-  "Reproducing" above). Concatenating group-at-a-time instead of loading every file's
-  groups before concatenating would roughly halve that.
+- `concat_l0` peak memory is about 16 GB, measured on the d07 fixture (see "Reproducing"
+  above). Concatenating group-at-a-time instead of loading every file's groups before
+  concatenating would roughly halve that. Selecting `groups` without `efe` avoids loading
+  the stream that dominates memory.
+
+Closed with the removal of phase matching from `TCParams`: whether the 2024 gridder's gain
+and phase correction is the right target for `phase_correct` parameters, and the `tcfit`
+pressure range spanning the whole multi-cast record.

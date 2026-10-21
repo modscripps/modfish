@@ -7,7 +7,8 @@ import yaml
 
 from modfish.chi.config import ChiParams
 
-#: `tc` keys from before the T-C correction sub-project reshape (task 3);
+#: `tc` keys that `TCParams` no longer has. The phase-matching correction
+#: they configured was replaced by `lag`, `tau_t` and `lowpass`.
 #: `FCTDConfig.from_dict` rejects them by name instead of falling through
 #: to the generic unknown-key error, so a stale cruise config fails loudly
 #: naming its replacement.
@@ -98,15 +99,20 @@ class GridParams:
     dz : float
         m (Matlab: 0.5)
     depth_min : float | None
-        m, grid lower bound. None: from data
+        m, center of the shallowest bin. The bin reaches `dz / 2` above
+        it. None: minimum finite depth of the cast samples, rounded down
+        to a multiple of `dz`.
     depth_max : float | None
-        m, grid upper bound. None: from data (Matlab clamped 0-2000)
+        m, center of the deepest bin. The bin reaches `dz / 2` below it.
+        None: maximum finite depth of the cast samples, rounded up to a
+        multiple of `dz` (Matlab clamped 0-2000). Samples outside the
+        outer bin edges are dropped.
     closure_exclude_flags : int
         `chi_flag` bits that keep a window out of the closure-derived bin
         means (`chi_tot`, `eps_chi`, `r`) on top of the bits excluded from
         every chi mean. `chi`, `kmax` and `phi` are unaffected. Default 0.
         Set 128 (`rrho_capped`) where the cap is driven by salinity-gradient
-        noise, as on MOTIVE SBE49 0664 (motive-cruise-proc drafts/44).
+        noise, as on MOTIVE SBE49 0664.
     """
 
     dz: float = 0.5  # m (Matlab: 0.5)
@@ -131,7 +137,10 @@ class FCTDConfig:
         Microconductivity chi parameters
     latitude_fallback : float | None
         degrees_north, used, with a warning, when the record has no usable
-        GPS fix. `lon` is then NaN throughout, and so are SA, CT and sgth0.
+        GPS fix (`gps` group absent, empty, or without a finite lat/lon
+        pair). `lon` is then NaN throughout, and so are SA, CT and sgth0.
+        SP and depth stay valid. None (default): `make_l1` raises
+        `ValueError` when there is no usable fix.
     gps_max_gap : float
         s, samples further than this from a GPS fix get NaN `lon`; their
         `lat` is still interpolated (or held) from the nearest fixes
@@ -181,8 +190,8 @@ class FCTDConfig:
         ValueError
             If unknown keys are provided, if nested sections are not dicts,
             if a scalar (non-section) field is given a dict value, if `tc`
-            carries a key removed in the T-C correction sub-project
-            (`phase_match`, `N`, `f0`, `tcfit`), or if `keep_counts` is set.
+            carries a removed key (`phase_match`, `N`, `f0`, `tcfit`), or
+            if `keep_counts` is set.
         """
         # Mapping of nested section names to their dataclass types and field sets
         nested_sections = {
@@ -226,8 +235,8 @@ class FCTDConfig:
                     for key in section_value:
                         if key in _REMOVED_TC_KEYS:
                             raise ValueError(
-                                f"tc.{key} was removed in the T-C correction "
-                                "sub-project; set lag, tau_t and lowpass instead"
+                                f"tc.{key} was removed; set lag, tau_t and "
+                                "lowpass instead"
                             )
 
                 # Check for unknown keys in this section
