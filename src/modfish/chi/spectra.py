@@ -161,6 +161,15 @@ def correct_spectrum(f, Pf, fs, spd, params: ChiParams):
     return f / spd, np.asarray(Pf, dtype=float) * spectral_factor(f, fs, spd, params)
 
 
+def band_kmax(spd, params: ChiParams):
+    """Upper band limit of a window, `min(kmax_cap, fmax_cap / spd)`, cpm.
+
+    Shared by `run_range` and `modfish.chi.batchelor.BandResponse`, so the
+    bins summed and the bins in the resolved fraction are the same.
+    """
+    return min(params.kmax_cap, params.fmax_cap / spd)
+
+
 def integrate(k, Pk, Nk, kmin, kmax, dtdc_val, D):
     """Noise-corrected band integral of the corrected spectrum.
 
@@ -351,7 +360,7 @@ def run_range(c1, fs, spd, dtdc_val, params: ChiParams, noise=None, diag_stride=
         k, Pk = f / s, Pf * factor
         Nk = None if noise is None else noise.at(f) * factor
         # the band no longer depends on the spectrum
-        kmax = min(params.kmax_cap, params.fmax_cap / s)
+        kmax = band_kmax(s, params)
         value, value_noise, nb, k_hi = integrate(
             k, Pk, Nk, params.kmin, kmax, dtdc_val[j], params.D)
         n_bins[j] = nb

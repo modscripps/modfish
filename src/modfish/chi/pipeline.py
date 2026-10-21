@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
-from modfish.chi.batchelor import FractionTable
+from modfish.chi.batchelor import BandResponse
 from modfish.chi.closure import _interp_at, closure, stratification
 from modfish.chi.config import FLAG_MEANINGS, FLAG_NOENV, ChiParams
 from modfish.chi.load import load_c1
@@ -17,31 +17,46 @@ from modfish.utils import gap_aware_rate, provenance
 logger = logging.getLogger(__name__)
 
 
-def _fraction_table(params: ChiParams) -> FractionTable:
-    """Batchelor band-fraction table over the kmax range `run_range` returns.
+def _closure(chi, spd, fs, strat: xr.Dataset, params: ChiParams) -> xr.Dataset:
+    """`closure` with one `BandResponse` per Welch segment length.
 
-    `integrate` reports the upper edge of the band it summed,
-    `k_last + dk/2`, so the recorded `kmax` exceeds `params.kmax_cap` by up
-    to half a Welch bin. The wavenumber bin width is `1 / (nsec * spd)` and
-    the widest bin comes from the slowest window the pipeline keeps, so the
-    table must reach `kmax_cap + 0.5 / (nsec * min_spd)` (14.5 cpm at the
-    defaults) or `r_of` clamps and evaluates `r` over a narrower band than
-    the sum, biasing `chi_tot` and the eps solve high by a few percent.
+    Ranges differ in `fs` by the ppm scatter of their measured rates, so
+    one table per segment length `M`, built at the median `fs` of its
+    windows, serves all of them; `r_of` takes each window's own `fs` for
+    the bins it sums. The speed grid reaches the fastest window with a
+    finite `chi`.
 
     Parameters
     ----------
+    chi, spd, fs : numpy.ndarray
+        Per window: band chi (K^2/s), fall rate (m/s), sampling rate (Hz).
+    strat : xarray.Dataset
+        `stratification` output on the windows.
     params : ChiParams
-        Supplies `kmin`, `kmax_cap`, `nsec`, `min_spd`, `nu`, `D` and `q`.
+        Chi parameters.
 
     Returns
     -------
-    FractionTable
-        Grid from `kmin + 0.5` to that ceiling at about 0.5 cpm spacing.
+    xarray.Dataset
+        `closure` output on all windows.
     """
-    kmax_max = params.kmax_cap + 0.5 / (params.nsec * params.min_spd)
-    n_kmax = max(int(round((kmax_max - params.kmin - 0.5) / 0.5)) + 1, 2)
-    return FractionTable.build(params.kmin, kmax_max, params.nu, params.D,
-                               params.q, n_kmax=n_kmax)
+    M = np.round(params.nsec * fs)
+    use = np.isfinite(chi) & np.isfinite(spd)
+    out = None
+    for m in np.unique(M):
+        idx = np.flatnonzero(M == m)
+        live = idx[use[idx]]
+        spd_max = max(float(spd[live].max()) if live.size else 0.0,
+                      params.min_spd + 0.02)
+        table = BandResponse.build(params, float(np.median(fs[idx])), spd_max)
+        part = closure(chi[idx], spd[idx], fs[idx], strat.isel(time=idx), params, table)
+        if idx.size == M.size:
+            return part
+        if out is None:
+            out = closure(np.full(M.size, np.nan), spd, fs, strat, params, table)
+        for name in part.data_vars:
+            out[name].values[idx] = part[name].values
+    return out
 
 
 def _label_casts(centers, casts: xr.Dataset):
@@ -254,11 +269,9 @@ def chi_dataset(ctd: xr.Dataset, casts: xr.Dataset, c1, ranges: pd.DataFrame,
     ds["direction"] = ("time", direction)
 
     if params.closure:
-        # the table reaches half a Welch bin above kmax_cap because that is
-        # where run_range's band edge can land; see _fraction_table
-        table = _fraction_table(params)
         strat = stratification(ctd, ds["time"].values, params)
-        clo = closure(ds["chi"].values, ds["kmax"].values, strat, params, table)
+        fs_win = ranges.fs.values[ds["range_id"].values]
+        clo = _closure(ds["chi"].values, ds["spd"].values, fs_win, strat, params)
         ds = ds.assign(**{k: strat[k] for k in ("n2", "Tz", "Sz", "Rrho")},
                        chi_tot=clo["chi_tot"], eps_chi=clo["eps_chi"], r=clo["r"])
         flag = ds["chi_flag"].values | clo["flag"].values
@@ -289,6 +302,8 @@ def chi_dataset(ctd: xr.Dataset, casts: xr.Dataset, c1, ranges: pd.DataFrame,
     attrs.update(provenance())
     attrs["enabled"] = int(params.enabled)
     attrs["closure"] = int(params.closure)
+    if params.closure:
+        attrs["r_model"] = "welch_response"
     if floor is not None:
         attrs["noise_source"] = floor.source
         attrs["noise_records"] = floor.records

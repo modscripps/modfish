@@ -88,6 +88,21 @@
     can now come out negative.
 
 ### Bug fixes
+-   The chi closure's resolved fraction `r` is the fraction of the
+    Batchelor variance the window's Welch band sum recovers on average
+    (`chi.batchelor.BandResponse`). It replaces `FractionTable`, the exact
+    integral of the Batchelor spectrum from `kmin` to the band's upper
+    edge, which disagreed with the band sum in two ways: the lower edge of
+    the summed bins is `k_first - dk/2`, not `kmin`, and the per-segment
+    detrend and Hamming leakage take power out of the lowest bins (bin 1
+    keeps 0.73 of a white spectrum). On synthetic c1 the old `r` was up to
+    10 % above the band sum at 1e-10 W/kg and 0.5 m/s, 3 % at 1e-8 W/kg,
+    under 1.5 % above 1 m/s. The new `r` matches it within 1.5 %. On the
+    2025 d07 FrontStation cast 50 (median fall rate 3.5 m/s) the median of
+    `chi_tot` and `eps_chi` is unchanged, with 98 % of windows within
+    -2 % to +3 %. `closure` and `solve_epsilon` take each window's `spd`
+    and `fs` in place of `kmax`. The chi group attrs carry
+    `r_model = "welch_response"`.
 -   `tc.find_lags` returned the edge lag (+4.875 s at 16 Hz with
     `window=80`) for every window when `t` or `c` held a single NaN:
     `filtfilt` spread the NaN over the whole record. NaN are now filled

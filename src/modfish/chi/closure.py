@@ -6,7 +6,7 @@ import numpy as np
 import xarray as xr
 from scipy.ndimage import uniform_filter1d
 
-from modfish.chi.batchelor import FractionTable
+from modfish.chi.batchelor import BandResponse
 from modfish.chi.config import FLAG_N2, FLAG_RCLIP, FLAG_RRHO, ChiParams
 from modfish.utils import sampling_interval
 
@@ -116,8 +116,8 @@ def stratification(ctd: xr.Dataset, centers, params: ChiParams) -> xr.Dataset:
     return out
 
 
-def solve_epsilon(chi_pe_hat, kmax, table: FractionTable, gamma):
-    """Invert `2 gamma eps r(eps, kmax) = chi_pe_hat` per window.
+def solve_epsilon(chi_pe_hat, spd, fs, table: BandResponse, gamma):
+    """Invert `2 gamma eps r(eps) = chi_pe_hat` per window.
 
     Parameters
     ----------
@@ -125,12 +125,13 @@ def solve_epsilon(chi_pe_hat, kmax, table: FractionTable, gamma):
         W/kg, the potential-energy dissipation rate implied by the
         measured chi (`stratification` and `closure`'s `chi_pe`). NaN or
         non-positive entries return NaN.
-    kmax : array_like
-        cpm, integration upper limit at each window, same shape as
-        `chi_pe_hat`.
-    table : FractionTable
-        Precomputed `r(eps, kmax)` used to invert the closure without
-        integrating the Batchelor spectrum per window.
+    spd : array_like
+        m/s, fall rate of each window, same shape as `chi_pe_hat`.
+    fs : array_like
+        Hz, sampling rate of each window's range, same shape.
+    table : BandResponse
+        Tabulated resolved fraction, evaluated per window with
+        `table.r_of(spd, fs)`.
     gamma : float
         Mixing efficiency.
 
@@ -141,7 +142,7 @@ def solve_epsilon(chi_pe_hat, kmax, table: FractionTable, gamma):
         (`g[0] < x < g[-1]`), both are log-log interpolated from the
         table and `clipped` is False. Below the table (`x <= g[0]`),
         `eps` is `table.eps_grid[0]` and `r` is the table's own floor
-        value `r_of(kmax)[0]` (never 1). Above the table (`x >= g[-1]`),
+        value `r_of(spd, fs)[0]` (never 1). Above the table (`x >= g[-1]`),
         both are NaN: the closure cannot be inverted there. NaN where the
         input is NaN or not positive.
     clipped : numpy.ndarray of bool
@@ -150,16 +151,17 @@ def solve_epsilon(chi_pe_hat, kmax, table: FractionTable, gamma):
         interpolated.
     """
     chi_pe_hat = np.asarray(chi_pe_hat, dtype=float)
-    kmax = np.asarray(kmax, dtype=float)
+    spd = np.asarray(spd, dtype=float)
+    fs = np.asarray(fs, dtype=float)
     eps = np.full(chi_pe_hat.shape, np.nan)
     r = np.full(chi_pe_hat.shape, np.nan)
     clipped = np.zeros(chi_pe_hat.shape, dtype=bool)
     log_eps = np.log10(table.eps_grid)
     for j in range(chi_pe_hat.size):
         x = chi_pe_hat[j]
-        if not (np.isfinite(x) and x > 0 and np.isfinite(kmax[j])):
+        if not (np.isfinite(x) and x > 0 and np.isfinite(spd[j]) and np.isfinite(fs[j])):
             continue
-        r_col = table.r_of(kmax[j])
+        r_col = table.r_of(spd[j], fs[j])
         g = 2 * gamma * table.eps_grid * r_col
         if x <= g[0]:
             # below the table: hold eps at the floor and r at its own floor value
@@ -175,21 +177,23 @@ def solve_epsilon(chi_pe_hat, kmax, table: FractionTable, gamma):
     return eps, r, clipped
 
 
-def closure(chi, kmax, strat: xr.Dataset, params: ChiParams, table: FractionTable) -> xr.Dataset:
+def closure(chi, spd, fs, strat: xr.Dataset, params: ChiParams,
+            table: BandResponse) -> xr.Dataset:
     """chi_pe, eps_chi, r and chi_tot at every window, with flags 8, 16, 128.
 
     Parameters
     ----------
     chi : array_like
         K^2/s, measured temperature-variance dissipation per window.
-    kmax : array_like
-        cpm, integration upper limit per window, same shape as `chi`.
+    spd, fs : array_like
+        m/s and Hz, fall rate and sampling rate per window, same shape as
+        `chi`.
     strat : xarray.Dataset
         `stratification` output on dim `time`, with `n2`, `alpha` and
         `Rrho`; supplies the `time` coordinate of the returned Dataset.
     params : ChiParams
         Supplies `g`, `rrho_factor_max` and `gamma`.
-    table : FractionTable
+    table : BandResponse
         Passed through to `solve_epsilon`.
 
     Returns
@@ -236,7 +240,7 @@ def closure(chi, kmax, strat: xr.Dataset, params: ChiParams, table: FractionTabl
     with np.errstate(divide="ignore", invalid="ignore"):
         chi_pe = (params.g * alpha) ** 2 * chi / n2 * factor
     chi_pe[bad_n2] = np.nan
-    eps, r, clipped = solve_epsilon(chi_pe, kmax, table, params.gamma)
+    eps, r, clipped = solve_epsilon(chi_pe, spd, fs, table, params.gamma)
     flag[clipped] |= FLAG_RCLIP
     chi_tot = chi / r
     out = xr.Dataset(
