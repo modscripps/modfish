@@ -6,8 +6,8 @@ parts of it into their Matlab real-time and post-processing code.
 
 - [fctd_processing.ipynb](fctd_processing.ipynb) runs one deployment from `.modraw` files to
   products, with the T-C corrections and the chi gain fitted on that deployment's own data.
-- [fctd_example.yml](fctd_example.yml) lists every configuration key with its default and a
-  one-line comment.
+- [fctd_example.yml](fctd_example.yml) lists every configuration key with its default, except
+  the recommended chi `rail_lo`, `rail_hi` and `min_bins`, and a one-line comment.
 - API detail is on the documentation site, <https://modscripps.github.io/modfish>.
 
 Part 1 compares the two chains. Part 2 describes the modfish stages with their defaults.
@@ -190,7 +190,8 @@ port it.
 - Why: the constant gain was the largest error in the Matlab chi, chi low by a factor 5.1 to
   7.2 on five of six review casts. Fitted MOTIVE gains differ by probe. On the 2025
   products with 14 or more fitted casts the medians run from 8.59 to 24.6 S/m per V.
-- Port: fit the gain per probe and fish combination after the first few deep down casts.
+- Port: fit the gain per probe and fish combination after the first few deep down casts,
+  against the T-C-corrected SBE49 `c`, after the T-C values are set.
 
 #### Noise floor
 
@@ -257,7 +258,7 @@ port it.
 | grid edge clamping | yes | affects real-time sections |
 | T-C low-pass and response | yes, per block | fit after the first deep down/up pairs; leave off until then |
 | thermal mass | yes | causal recursion, per sample |
-| chi gain | yes | fit per probe after the first deep down casts; the largest chi error |
+| chi gain | yes | fit per probe after the first deep down casts, against the T-C-corrected SBE49 c, after the T-C values are set; the largest chi error |
 | rail thresholds, `r` clip, `n2` guard | yes | cheap checks per window |
 | noise floor subtraction | yes | per window with a fixed floor |
 | in-situ `Rrho` and Batchelor `r` | post-processing | needs the `r` table, port when convenient |
@@ -359,10 +360,10 @@ The MOTIVE products since 2026-09-29 use a fleet profile of `alpha * tau` at `be
 0.120, 0.124, 0.100, 0.118, 0.154, 0.169, 0.195, 0.232, 0.237 s at 75, 125, 175, 250, 350, 450,
 600, 800, 1000 dbar. It is empirical, built from thermal-mass scans of three SBE49s (0387, 0537,
 0674) on both MOTIVE cruises. It is a reference. modfish does not use it by default.
-On RR2410 (2024, SBE49 0674) it over-corrects at 500 to 900 dbar by up to -5.5e-3 g/kg, and
-motive-cruise-proc drafts/45 rejected it as a modfish default. A pressure profile of this kind
-needs many deep down/up pairs, ideally on several instruments. Figure 4 shows its effect
-in sample.
+On RR2410 (NESMA, 2024, same SBE49 0674, not used in the fit) it over-corrects at 400 to 900
+dbar by up to -5.5e-3 g/kg. motive-cruise-proc drafts/45 rejected it as a modfish default. A
+pressure profile of this kind needs many deep down/up pairs, ideally on several instruments.
+Figure 4 shows its effect in sample.
 
 ### 2.6 `chi`: microconductivity chi
 
@@ -505,9 +506,9 @@ pairs. Right: the profile's knots, held constant beyond the end knots, against t
 include d12 and d09, so it is no independent check. At 300 dbar and deeper the rms of the band
 means falls from 4.90 to 0.57 × 10⁻³ g/kg on d12 and from 6.82 to 3.84 × 10⁻³ g/kg on d09.
 Above 300 dbar the profile does not improve d09: rms goes from 6.28 to 7.08 × 10⁻³ g/kg. The
-150 to 200 dbar band goes from 1.92 to 8.28 × 10⁻³ g/kg. On RR2410 (2024) the profile over-corrects
-at 500 to 900 dbar. motive-cruise-proc drafts/45 rejected it as a modfish default. It is a
-MOTIVE-specific choice. Fit a scalar on your own down/up pairs. (motive-cruise-proc drafts/52.)
+150 to 200 dbar band goes from 1.92 to 8.28 × 10⁻³ g/kg. On RR2410 (NESMA, 2024) the profile
+over-corrects at 400 to 900 dbar. motive-cruise-proc drafts/45 rejected it as a modfish
+default. It is a MOTIVE-specific choice. Fit a scalar on your own down/up pairs. (motive-cruise-proc drafts/52.)
 
 ### modfish against the shipboard Matlab grid
 

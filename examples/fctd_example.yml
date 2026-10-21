@@ -25,19 +25,23 @@ tc:
   #   p: [...]             # dbar
   #   product: [...]       # s
   #
-  # Reference only: values fitted for MOTIVE SBE49 0537 (motive-cruise-proc
-  # config.yml). They are sensor and deployment specific. Fit your own.
+  # Reference only (motive-cruise-proc config.yml). Sensor and deployment
+  # specific. Fit your own.
+  # lag, tau_t and lowpass were fitted for MOTIVE SBE49 0537:
   #   lag: 0.03
   #   tau_t: 0.05
   #   lowpass: 5.0
+  # The thermal mass is a MOTIVE fleet product, built from scans of three
+  # SBE49s (0387, 0537, 0674):
   #   thermal_mass: true
   #   beta: 0.0833333       # 1/s = 1/12 s, the time constant the profile was fitted at
-  #   alpha: 0.010          # earlier scalar constant, superseded by the profile below
+  #   alpha: 0.010          # earlier scalar constant, MOTIVE products replaced it with the profile below
   #   thermal_mass_profile:
   #     p: [75.0, 125.0, 175.0, 250.0, 350.0, 450.0, 600.0, 800.0, 1000.0]
   #     product: [0.120, 0.124, 0.100, 0.118, 0.154, 0.169, 0.195, 0.232, 0.237]
-  # Caveat: on RR2410 this fleet profile over-corrects at 500 to 900 dbar
-  # (motive-cruise-proc drafts/45), so it is not a default.
+  # Caveat: on RR2410 (NESMA, 2024, same SBE49 0674, not used in the fit) this
+  # fleet profile over-corrects at 400 to 900 dbar (motive-cruise-proc
+  # drafts/45), so it is not a default.
 
 # Depth gridding
 grid:
