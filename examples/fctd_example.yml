@@ -39,9 +39,10 @@ tc:
   #   thermal_mass_profile:
   #     p: [75.0, 125.0, 175.0, 250.0, 350.0, 450.0, 600.0, 800.0, 1000.0]
   #     product: [0.120, 0.124, 0.100, 0.118, 0.154, 0.169, 0.195, 0.232, 0.237]
-  # Caveat: on RR2410 (NESMA, 2024, same SBE49 0674, not used in the fit) this
-  # fleet profile over-corrects at 400 to 900 dbar (motive-cruise-proc
-  # drafts/45), so it is not a default.
+  # Caveat: on RR2410 (NESMA, 2024, SBE49 0674) this fleet profile
+  # over-corrects at 400 to 900 dbar (motive-cruise-proc drafts/45), so it is
+  # not a default. The profile's 0674 data came from MOTIVE. RR2410 data were
+  # not used in the fit.
 
 # Depth gridding
 grid:

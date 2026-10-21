@@ -360,8 +360,8 @@ The MOTIVE products since 2026-09-29 use a fleet profile of `alpha * tau` at `be
 0.120, 0.124, 0.100, 0.118, 0.154, 0.169, 0.195, 0.232, 0.237 s at 75, 125, 175, 250, 350, 450,
 600, 800, 1000 dbar. It is empirical, built from thermal-mass scans of three SBE49s (0387, 0537,
 0674) on both MOTIVE cruises. It is a reference. modfish does not use it by default.
-On RR2410 (NESMA, 2024, same SBE49 0674, not used in the fit) it over-corrects at 400 to 900
-dbar by up to -5.5e-3 g/kg. motive-cruise-proc drafts/45 rejected it as a modfish default. A
+On RR2410 (NESMA, 2024, SBE49 0674) it over-corrects at 400 to 900 dbar by up to -5.5e-3
+g/kg. The profile's 0674 data came from MOTIVE. RR2410 data were not used in the fit. motive-cruise-proc drafts/45 rejected it as a modfish default. A
 pressure profile of this kind needs many deep down/up pairs, ideally on several instruments.
 Figure 4 shows its effect in sample.
 
