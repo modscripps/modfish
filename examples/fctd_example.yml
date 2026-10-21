@@ -1,0 +1,88 @@
+# Template FCTD configuration for modfish.fctd.FCTDConfig.from_yaml.
+# Every accepted key is listed at its default unless a comment says otherwise.
+# Unknown keys raise an error, so typos fail at load time.
+
+# Cast detection and preprocessing
+casts:
+  smooth: 16.0       # s, median filter and boxcar on pressure; longer time gaps split the record
+  wlim: 0.4          # dbar/s, fall-rate threshold for cast detection
+  min_range: 10.0    # dbar, minimum cast pressure range
+  min_duration: 10.0 # s, minimum cast duration
+
+# Temperature-conductivity corrections. All off by default (no-op).
+# Fit lag, tau_t and the thermal mass parameters on your own data before
+# switching them on (see modfish.tc).
+tc:
+  lag: 0.0              # s, T advance (T lags C); SBE49 manual: 0.0625
+  tau_t: 0.0            # s, thermistor time constant; 0 disables
+  lowpass: null         # Hz, zero-phase low-pass on t and c; null disables
+  thermal_mass: false   # enable the thermal mass correction
+  alpha: 0.03           # thermal anomaly amplitude (SBE49 manual); ignored when a profile is set
+  beta: 0.142857        # 1/s, inverse relaxation time (SBE49 manual, 1/7)
+  viscous_heating: false # derivation is for an unpumped UCTD
+  pr: 12.4              # Prandtl number, Larson and Pedersen 1996 at 2 degC
+  # thermal_mass_profile:  # pressure profile of alpha*tau; replaces the scalar alpha when set
+  #   p: [...]             # dbar
+  #   product: [...]       # s
+  #
+  # Reference only: values fitted for MOTIVE SBE49 0537 (motive-cruise-proc
+  # config.yml). They are sensor and deployment specific. Fit your own.
+  #   lag: 0.03
+  #   tau_t: 0.05
+  #   lowpass: 5.0
+  #   thermal_mass: true
+  #   beta: 0.0833333       # 1/s = 1/12 s, the time constant the profile was fitted at
+  #   alpha: 0.010          # earlier scalar constant, superseded by the profile below
+  #   thermal_mass_profile:
+  #     p: [75.0, 125.0, 175.0, 250.0, 350.0, 450.0, 600.0, 800.0, 1000.0]
+  #     product: [0.120, 0.124, 0.100, 0.118, 0.154, 0.169, 0.195, 0.232, 0.237]
+  # Caveat: on RR2410 this fleet profile over-corrects at 500 to 900 dbar
+  # (motive-cruise-proc drafts/45), so it is not a default.
+
+# Depth gridding
+grid:
+  dz: 0.5                   # m, bin size
+  depth_min: null           # m, center of the shallowest bin; null: from data
+  depth_max: null           # m, center of the deepest bin; null: from data
+  closure_exclude_flags: 0  # chi_flag bits that keep a window out of closure-derived bin means; 128 (rrho_capped) where the cap follows salinity-gradient noise
+
+# Microconductivity chi
+chi:
+  enabled: false     # the gain must be fitted first; enabled: true without gain raises
+  gain: null         # S/m per volt of c1 (2.5 V full scale), fitted per product; set before enabling chi
+  gain_source: ""    # free-text note on where the gain came from
+  antialias: som_sinc4 # som_sinc4 (SOM ADC) or ap00_sinc2 (Alford and Pinkel 2000)
+  noise: "builtin:fctd_2026" # instrument noise floor subtracted in the band integral; null disables
+  phi_max: 0.5       # noise fraction above which a window is flagged noise-dominated
+  kmin: 1.0          # cpm, lower bound of the summed wavenumber band
+  kmax_cap: 12.5     # cpm, upper bound cap of the summed band
+  fmax_cap: 50.0     # Hz, frequency cap on the band (fmax_cap / spd, cpm)
+  min_spd: 0.5       # m/s, windows below return NaN
+  window: 2.0        # s, window length
+  step: 0.25         # s, window step
+  nsec: 0.5          # s, Welch segment length
+  min_bins: 3        # recommended 3 (default 4); 4 acted as a 0.64 m/s fall-rate cut (motive-cruise-proc drafts/43)
+  closure: true      # compute chi_tot, eps_chi, r and the stratification variables
+  closure_window: 31.25 # s, boxcar for n2, Tz, Sz
+  rrho_factor_max: 5.0  # cap on (1 + 1/Rrho^2)
+  gap: 0.01          # s, a step above this splits ranges
+  rail_lo: 0.05      # V, recommended 0.05 (default 0.001 missed c1 dropouts; motive-cruise-proc drafts/41)
+  rail_hi: 2.45      # V, recommended 2.45 (default 2.499)
+  spd_smooth: 1.0    # s, fall-rate smoothing window
+  # Hardware and physics constants: do not change unless the hardware differs.
+  #   R24: 1.0e6       # ohm, SBE 7 preemphasis network
+  #   R25: 577.0e3     # ohm
+  #   R22: 266.1       # ohm
+  #   C19: 1.0e-6      # farad
+  #   nu: 1.3e-6       # m^2/s, kinematic viscosity
+  #   D: 1.4e-7        # m^2/s, thermal diffusivity
+  #   q: 3.7           # Batchelor constant
+  #   gamma: 0.2       # mixing efficiency
+  #   rho_0: 1026.0    # kg/m^3, reference density
+  #   g: 9.8           # m/s^2
+
+# Top level
+latitude_fallback: null # degrees_north, used with a warning when the record has no GPS fix; null: make_l1 raises
+gps_max_gap: 300.0      # s, samples further than this from a GPS fix get NaN lon
+dpdt_smooth: 1.0        # s, dPdt smoothing window
+groups: null            # L0 groups concat_l0 loads; null loads all, ["ctd", "gps"] skips the large efe stream

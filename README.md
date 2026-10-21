@@ -17,9 +17,11 @@ import modfish
 raw = sorted(Path("raw").glob("*.modraw"))
 modfish.modraw.convert(raw, "l0")
 l0 = sorted(Path("l0").glob("*.nc"))
-config = modfish.fctd.FCTDConfig.from_yaml("fctd.yml")
+config = modfish.fctd.FCTDConfig.from_yaml("fctd.yml")  # start from examples/fctd_example.yml
 l1_path, grid_path = modfish.fctd.process_deployment(l0, "proc", "d07", config=config)
 ```
+
+The `examples/` folder holds a template configuration (`fctd_example.yml`) with every key at its default and commented reference values.
 
 ## How to Install
 Clone or download the repository and install via `pip install <path-to-modfish>` or, to be able to make changes to the code on the fly, as editable package via `pip install -e <path-to-modfish>`.
