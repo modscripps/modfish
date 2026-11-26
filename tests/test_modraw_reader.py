@@ -201,3 +201,18 @@ def test_read_vnav_without_vnmar_adds_no_group(tmp_path):
 
 def test_read_block_time_is_nanoseconds(tree):
     assert tree.ds.block_time.dtype == np.dtype("datetime64[ns]")
+
+
+def test_read_headerless_minnow_file(rootdir):
+    # Minnow firmware (mod_som_gg11_firmware_minnow, RR2610) writes no ASCII
+    # header: the file opens directly on a $SOM3 frame.
+    path = rootdir / "data/MINNOW_modraw_excerpt_2026.modraw"
+    assert path.read_bytes()[:5] == b"$SOM3"
+    assert modfish.modraw.read_header(path) == ""
+    tree = modfish.modraw.read(path)
+    efe = tree["efe"].dataset
+    assert list(efe.data_vars) == ["t1", "t2", "f1", "c1", "a1", "a2", "a3"]
+    assert efe.attrs["n_bad_checksum"] == 0
+    dt = np.diff(efe.time.values).astype("timedelta64[ns]").astype(float).mean() * 1e-9
+    assert abs(1 / dt - 325.52) < 1
+    assert "vnav" in tree.children
