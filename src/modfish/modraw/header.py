@@ -20,7 +20,11 @@ _CAL_KEYS = (
 def read_header(file):
     """Read the header of a .modraw file.
 
-    The header length in bytes is given on the first line of the file.
+    The header length in bytes is given on the first line of the file,
+    as `header_file_size_inbytes = <n>`. Files from the Epsi minnow
+    firmware carry no ASCII header and open directly on a `$SOM3` frame;
+    for those, and any other file whose first line declares no length,
+    the header is empty.
 
     Parameters
     ----------
@@ -30,12 +34,14 @@ def read_header(file):
     Returns
     -------
     head : str
-        Header text.
+        Header text, `""` if the file has no header.
     """
     with open(file, "rb") as f:
-        nbytes = int(f.readline().split(b"=")[1])
+        m = re.match(rb"[^=\r\n$]*=\s*(\d+)\s*$", f.readline())
+        if m is None:
+            return ""
         f.seek(0)
-        return f.read(nbytes).decode("latin-1")
+        return f.read(int(m.group(1))).decode("latin-1")
 
 
 def header_setup(head):
